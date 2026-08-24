@@ -1,8 +1,11 @@
 # @brglng/pi-auto-review
 
-> This package is a fork of
-> [`@erichll/pi-auto-review`](https://github.com/erichll/pi-packages) and
-> follows its implementation.
+This package is a fork of [`@erichll/pi-auto-review`](https://github.com/erichll/pi-packages)
+
+The differences from the upstream:
+- Retry count is removed.
+
+## Original README from `@erichll/pi-auto-review`
 
 A fail-closed, model-backed boundary reviewer for the Pi coding agent.
 
