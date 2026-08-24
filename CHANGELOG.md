@@ -1,11 +1,118 @@
 # Changelog
 
+## 0.11.0-brglng.1 - 2026-08-24
+
+- **Reset to upstream 0.11.0.** Replace the fork with the published
+  `@erichll/pi-auto-review` 0.11.0 snapshot, keeping only the
+  `@brglng/pi-auto-review` package identity and README fork notice.
+- **Unlimited configured retries.** Remove the `retries` upper bound: any
+  non-negative integer is accepted and a review may make up to `retries + 1`
+  actual model calls. The shared `timeoutMs` deadline, abort handling,
+  `Retry-After` cap, and fail-closed behavior are unchanged, and the default
+  remains `retries: 2`.
+
+## 0.11.0 - 2026-08-24
+
+- **Structured network destination.** Network approval requests now carry
+  separate host, port, and protocol fields alongside the existing combined
+  destination string. One-shot grants bind each component independently, so a
+  grant issued for one host-port-protocol combination cannot be reused for a
+  different one.
+- **Deferred reviews are more visible.** The review widget now highlights
+  deferred verdicts with a warning accent instead of the previous muted style,
+  making pending human decisions easier to spot.
+
+## 0.10.0 - 2026-08-22
+
+- Replace the review footer and newly appended transcript entries with one
+  above-editor `pi-auto-review` widget. Each permission check independently
+  replaces the previous display, shows the configured reviewer model while it
+  runs, and updates in place with its final outcome and metadata. The latest
+  result remains until the next check and is cleared on session change or
+  shutdown.
+- Prevent late concurrent completions and permission decisions from overwriting
+  a newer check. A current local denial adds `Local confirmation · denied` to
+  that result only. Widget failures fall back to notifications without changing
+  authorization behavior.
+- Remove tool-call grouping, timers, capacity eviction, and tool/turn flush
+  wiring for new feedback while retaining the historical entry renderer. Bound
+  target and rationale text with visible ellipses, preserve width-aware wrapping,
+  and keep token, duration, and call-count numbers in the normal metadata color.
+
+## 0.9.0 - 2026-08-22
+
+- Require `@gotgenes/pi-permission-system` `^27.0.0` and register through the
+  session-keyed `getPermissionsService(sessionId)` locator. Repeated ready
+  broadcasts are idempotent; session changes, shutdown, and late asynchronous
+  imports cannot retain or revive a stale authorizer registration. In-process
+  child nodes register against their own service without replacing the
+  parent's process-local broker capability.
+- Group local TUI review results by `(sessionId, toolCallId)` into one
+  transcript entry while preserving independent asks, model calls, verdicts,
+  grants, confirmations, and audit records. Denials flush immediately; tool
+  start, terminal permission denial, turn/agent/session end, a 60-second TTL,
+  and bounded-capacity eviction provide lossless fallback flushes. Forwarded,
+  uncorrelated, and non-TUI reviews remain immediate.
+- Add `toolCallId` to each `pi_auto_review_decision` audit entry and retain
+  compatibility rendering for historical single-result transcript entries.
+- Remove the review entry's left quote bar and combine each target with its
+  rationale and member surface/outcome on one line, keeping model/token/duration
+  metadata separate.
+- Label every displayed model token count with `toks` in both grouped and
+  single-result output.
+
+## 0.8.2 - 2026-08-21
+
+- Structure interactive review results as headline, target, rationale, and a
+  meta line with the reviewer model name, input/output tokens, duration, and extra
+  calls. The TUI renders them as markdown-style quote rows (`│` + `mdQuote`),
+  with allow/deny verbs and token counts tinted from the theme. The model id is
+  shown without a provider prefix; audit still records the full `provider/id`.
+  Local hard denies omit model and token fields because no model ran.
+
+## 0.8.1 - 2026-08-21
+
+- Restore TUI auto-confirm for capped `path` / `external_directory` allows on
+  permission-system 26.x. `permissions:ui_prompt` no longer carries `message`;
+  the bridge now binds `requestId` plus `request.value` (falling back to the
+  display `value`, then the legacy `message`) and fingerprints the live dialog
+  with those fields. Top-level display `surface` is not treated as the gate.
+
+## 0.8.0 - 2026-08-21
+
+- Add `/auto-review-approve` for exact non-critical denial retries and remove
+  the unprefixed `/approve` command without a compatibility alias.
+- Add interactive `/auto-review-break-glass` for a recent critical model deny.
+  The high-friction confirmation is bound to the full request hash, session,
+  scope, and original request ID, expires after 60 seconds, permits one direct
+  retry, and never bypasses deterministic or protected-write hard denies.
+- Add tighten-only `breakGlassEnabled` (default `true`), structured break-glass
+  allow provenance, and challenge/authorization/consumption/rejection audit
+  events. Challenge phrases are never included in audit events.
+
+## 0.7.0 - 2026-08-20
+
+- **Named `/home` paths are not a home wipe.** The reviewer prompt now matches
+  the deterministic hard-deny: recursive forced wipe of `/`, `~`, `$HOME`, or
+  the home directory itself remains forbidden. A narrow, user-requested delete
+  of named files or directories under `/home/...` is high-risk, not critical.
+  High risk without medium/high user authorization defers to the human instead
+  of denying as if it were a hard deny. The fixed prompt is compacted without
+  changing those rules.
+- **Clearer agent-facing denials.** Authorizer denies still fail closed, but the
+  teaching reason now states that automatic policy denied the request (not a
+  human click), forbids rephrasing or circumvention, and points to the exact
+  retry command
+  for one exact retry when the user already requested that action. The
+  permission-system wrapper may still say `User denied`; the reason suffix is
+  the correction this package can own.
+
 ## 0.6.0 - 2026-08-20
 
 - **Remove host user-constraint overlay.** Stop rewriting model allows from
   regex matches on user text (`constraintEffect` / `vagueContinuation` /
   authorization ceilings). Older messages enter evidence only via an exact
-  request reference or trusted `/approve` retry. Compaction summaries remain
+  request reference or trusted exact retry. Compaction summaries remain
   excluded from user intent. Hard denies, grant hashing, and the reviewer
   model are unchanged.
 

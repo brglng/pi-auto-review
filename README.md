@@ -8,19 +8,41 @@ A fail-closed, model-backed boundary reviewer for the Pi coding agent.
 
 The extension participates in `@gotgenes/pi-permission-system` as the
 `pi-auto-review` authorizer and exposes a process-local broker for OS sandbox
-adapters. The npm package and reviewer model have separate names:
+adapters. It is an authorizer *inside* the permission system, so installing
+that dependency is a hard prerequisite (see [Install and enable](#install-and-enable)). The npm package and reviewer model have separate names:
 
-- package: `@erichll/pi-auto-review`
+- package: `@brglng/pi-auto-review`
 - authorizer: `pi-auto-review`
 - default reviewer model: `codex-auto-review`
 
+## Contents
+
+- [Install and enable](#install-and-enable)
+- [Security model](#security-model)
+- [Configuration](#configuration)
+  - [Deadlines and retries](#deadlines-and-retries)
+- [Operator feedback and exact retry](#operator-feedback-and-exact-retry)
+- [Boundary broker API](#boundary-broker-api)
+- [Reviewer context and token budgets](#reviewer-context-and-token-budgets)
+- [Sandbox integration](#sandbox-integration)
+- [Trust boundary](#trust-boundary)
+- [Telemetry](#telemetry)
+- [Real-model smoke test](#real-model-smoke-test)
+
 ## Install and enable
 
-Install the package outside the agent-writable workspace:
+> **Prerequisite:** pi-auto-review is an authorizer inside
+> `@gotgenes/pi-permission-system`. Pi does not auto-install peer packages, so
+> install the permission system separately (once per machine) before this
+> extension. Version 0.11.0 requires permission-system 27.x:
 
 ```bash
-pi install npm:@erichll/pi-auto-review
+pi install npm:@gotgenes/pi-permission-system
+pi install npm:@brglng/pi-auto-review
 ```
+
+Install the package outside the agent-writable workspace (see
+[Trust boundary](#trust-boundary)):
 
 Add it to the permission-system authorizer chain:
 
@@ -46,7 +68,7 @@ adapters must consume the exact grant before retrying an operation. Changing
 the command, path, resolved path, destination, cwd, agent, or tool input
 invalidates that grant.
 
-Permission-system v24 downgrades authorizer allows on `path` and
+Permission-system downgrades authorizer allows on `path` and
 `external_directory` to `defer`. In an interactive TUI,
 `autoConfirmBoundedAllows` can bind the exact model allow to the immediately
 following recognized permission dialog. The bridge is request-ID-bound,
@@ -54,8 +76,15 @@ expires after ten seconds, and is consumed once. Mode, component, request, or
 event-order mismatches leave the original human dialog in place.
 
 Automatic review stops for the current turn after three consecutive denials or
-ten denials in the last fifty reviews. An explicit denial tells the agent not
-to pursue the same outcome through a workaround.
+ten denials in the last fifty reviews. An explicit denial tells the agent that
+automatic policy denied the request (not a human click), not to rephrase or
+circumvent the same action, and points to `/auto-review-approve` for an exact
+non-critical reviewer retry or `/auto-review-break-glass` for a critical model
+denial. Local deterministic hard denies never offer an override command.
+
+Deterministic hard denies cover recursive forced wipes of `/`, `~`, and
+`$HOME`. A named path under `/home/...` is reviewed by the model as high-risk,
+not treated as a home-directory wipe.
 
 ## Configuration
 
@@ -88,6 +117,7 @@ Package defaults:
   "maxToolTranscriptTokens": 1200,
   "maxRelevantResultTokens": 800,
   "maxReviewerInputTokens": 8192,
+  "breakGlassEnabled": true,
   "failureMode": "deny",
   "grantTtlMs": 60000,
   "autoConfirmBoundedAllows": ["external_directory", "path"]
@@ -99,33 +129,48 @@ terminal. Set `autoConfirmBoundedAllows` to `[]` to keep every bounded allow
 manual.
 
 Project configuration may only lower timeouts, token/evidence limits, retries,
-and grant TTL, set `failureMode` to `"deny"`, or remove auto-confirmed
-surfaces. It cannot select a model, raise a trusted limit, or weaken fail-closed
-behavior. Invalid configuration disables the reviewer for that session.
+and grant TTL, set `failureMode` to `"deny"`, set `breakGlassEnabled` to
+`false`, or remove auto-confirmed surfaces. It cannot re-enable break glass,
+select a model, raise a trusted limit, or weaken fail-closed behavior. Invalid
+configuration disables the reviewer for that session.
 
 ### Deadlines and retries
 
 `timeoutMs` is one deadline shared by model resolution, authentication, model
 attempts, and retry delays. Each attempt receives only the remaining time.
-Provider-internal retries are disabled, and a review makes at most two actual
-model calls even when the public `retries` value is higher.
+Provider-internal retries are disabled. In this fork the public `retries`
+value has no upper bound: a review makes at most `retries + 1` actual model
+calls, and the shared deadline still bounds every attempt and retry delay.
 
 Valid decisions, output-length stops, timeouts, aborts, authentication/model/
 request errors, and unknown failures do not retry. Empty, non-JSON, or
 schema-invalid output and recognized connection, temporary 5xx, or 429
-failures may retry once when the retry budget and deadline allow it. A
+failures may retry while the configured retry budget and deadline allow it. A
 `Retry-After` above five seconds or beyond the remaining deadline fails closed.
 Format retries preserve the canonical request and selected evidence and append
 only a fixed, budget-checked schema correction.
 
 ## Operator feedback and exact retry
 
-Interactive sessions show a best-effort footer while review is running and a
-short result toast for allow, local confirmation, defer, deny, or circuit
-breaker outcomes. UI delivery never changes the authorization result.
+Interactive sessions show the current permission check in a single widget
+above the editor. Each check first shows its surface, compact target, and the
+dynamically configured reviewer model, then replaces that content in place
+with the outcome, target and rationale, model, token usage, duration, and any
+extra call count. A new check replaces the previous result; the latest result
+remains visible until then and is cleared when the session changes or shuts
+down. Concurrent older checks cannot overwrite the most recently started one.
 
-In an interactive TUI, `/approve` lists up to ten recent model denials from the
-current session. Selecting one asks the agent to retry exactly that request.
+Every request still has its own model call, verdict, grant, local confirmation,
+and audit record. No new review-result transcript entries are written. Existing
+`pi-auto-review` entries in historical sessions remain renderable. Non-TUI
+modes retain best-effort notifications, and a failed TUI widget update falls
+back to the same notification path. UI delivery never changes the authorization
+result.
+
+In an interactive TUI, `/auto-review-approve` lists up to ten recent
+non-critical model denials from the current session. Selecting one asks the
+agent to retry exactly that request. The old `/approve` command is not
+registered.
 The host-generated override:
 
 - binds the complete request hash;
@@ -135,6 +180,18 @@ The host-generated override:
 - cannot be reissued for the same request semantics in that session.
 
 It is authorization evidence, not a direct allow.
+
+`/auto-review-break-glass` is a separate, high-friction path for model denials
+whose risk level is `critical`. It lists only critical model denials from the
+same session made in the last five minutes. After showing the rationale,
+surface, cwd, command or target summary, and request-hash fingerprint, it
+requires an explicit confirmation and a random `BREAK-GLASS <CODE>` phrase
+within 60 seconds. Successful confirmation creates a 60-second, one-use
+authorization bound to the complete request hash, session, scope, and original
+request ID. The exact retry reruns local hard-deny checks, then allows directly
+without calling the reviewer and, for sandbox adapters, still issues the normal
+one-shot grant. Break glass does not reset circuit-breaker history and can be
+disabled in trusted or project configuration with `breakGlassEnabled: false`.
 
 ## Boundary broker API
 
@@ -150,7 +207,7 @@ Adapters should use the exported helper:
 import {
   getBoundaryBroker,
   type BoundaryRequest,
-} from "@erichll/pi-auto-review";
+} from "@brglng/pi-auto-review";
 
 const request: BoundaryRequest = {
   id: "sandbox-runtime-query-id",
@@ -168,6 +225,13 @@ const decision = await broker?.review(request, {
   scopeKey: "pi-session-id:turn-id",
   issueGrant: true,
 });
+
+// A break-glass allow includes structured provenance:
+// decision.authorization = {
+//   kind: "break-glass",
+//   originalRequestId: "...",
+//   confirmedAt: 0,
+// };
 
 if (
   decision?.kind === "allow" &&
@@ -248,7 +312,7 @@ Writes to the installed reviewer package, its user-global configuration,
 project and global security configuration, and the global audit directory are
 deterministically denied.
 
-## Telemetry and smoke testing
+## Telemetry
 
 Every actual model call emits an internal `review_attempt`; each approval emits
 one `review_complete`. Events contain stable status/error classes, timings,
@@ -256,6 +320,8 @@ usage counters, evidence metadata, and prompt-part counts. They do not contain
 prompt or response text, provider errors, credentials, headers, or URL query
 values. Usage is marked `unknown_provenance` when pi-ai cannot distinguish
 provider counters from initialized values, and `unavailable` when absent.
+
+## Real-model smoke test
 
 For a controlled real-model smoke test, load only the provider, reviewer,
 sandbox, and audit listener:
