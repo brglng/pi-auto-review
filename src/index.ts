@@ -1694,15 +1694,13 @@ async function complete(
     let lastError: unknown;
     let lastErrorClass: ReviewErrorClass = "unknown";
     const retryErrors: ReviewErrorClass[] = [];
-    // Track retry budget directly. Avoid deriving an attempts ceiling with
-    // `retries + 1`, which can overflow or lose precision for large values.
-    let retriesRemaining = config.retries;
+    const maxAttempts = config.retries + 1;
     const formatRetryFitsBudget =
       preflight.total.estimatedTokens +
         preflightPart(`\n\n${FORMAT_RETRY_INSTRUCTION}`).estimatedTokens <=
       config.maxReviewerInputTokens;
     let formatRetry = false;
-    for (let attempt = 1; ; attempt++) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let runtime: ReviewerRuntime;
       try {
         const auth = await abortableOperation(
@@ -1803,7 +1801,7 @@ async function complete(
         !decision &&
         isRetryableError(errorClass) &&
         (!isFormatError(errorClass) || formatRetryFitsBudget) &&
-        retriesRemaining > 0 &&
+        attempt < maxAttempts &&
         !controller.signal.aborted &&
         deadlineAt - Date.now() > delayMs;
       const observation: ReviewAttemptObservation = {
@@ -1839,7 +1837,6 @@ async function complete(
       incrementError(errorCounts, errorClass);
       if (controller.signal.aborted) break;
       if (!willRetry) break;
-      retriesRemaining--;
       formatRetry = isFormatError(errorClass);
       try {
         await abortableDelay(delayMs, controller.signal);
