@@ -4,6 +4,7 @@ This package is a fork of [`@erichll/pi-auto-review`](https://github.com/erichll
 
 The differences from the upstream:
 - Retry count is removed.
+- `timeoutMs` no longer has an upper bound.
 
 ## Original README from `@erichll/pi-auto-review`
 

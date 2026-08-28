@@ -5,12 +5,17 @@
 - **Reset to upstream 0.14.0.** Replace the fork with the published
   `@erichll/pi-auto-review` 0.14.0 snapshot, keeping the
   `@brglng/pi-auto-review` package identity, README fork notice, and the
-  unlimited-retries change.
+  unlimited-retries and unbounded-`timeoutMs` changes.
 - **Unlimited configured retries.** Remove the `retries` upper bound: any
   non-negative integer is accepted and a review may make up to `retries + 1`
   actual model calls. The shared `timeoutMs` deadline, abort handling,
   `Retry-After` cap, and fail-closed behavior are unchanged, and the default
   remains `retries: 2`.
+- **Unlimited review deadline.** Remove the `timeoutMs` upper bound: any
+  integer of at least 1000 ms is accepted, so slow reviewer models no longer
+  fail closed at the previous 120-second ceiling. Fail-closed behavior on
+  deadline expiry, abort handling, the `Retry-After` cap, and the default
+  `timeoutMs: 90000` are unchanged.
 
 ## 0.14.0 - 2026-08-28
 
