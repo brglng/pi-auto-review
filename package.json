@@ -1,6 +1,6 @@
 {
   "name": "@brglng/pi-auto-review",
-  "version": "0.11.0-brglng.1",
+  "version": "0.14.0-brglng.1",
   "description": "Fail-closed, model-backed approval broker for Pi: deterministically hard-denies dangerous operations, reviews dangerous boundaries with a reviewer model, and issues one-shot expiring grants that OS sandbox adapters must consume before retrying.",
   "type": "module",
   "license": "MIT",
@@ -13,18 +13,17 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/brglng/pi-packages.git",
-    "directory": "packages/pi-auto-review"
+    "url": "git+https://github.com/brglng/pi-auto-review.git"
   },
-  "homepage": "https://github.com/brglng/pi-packages/tree/main/packages/pi-auto-review",
+  "homepage": "https://github.com/brglng/pi-auto-review",
   "bugs": {
-    "url": "https://github.com/brglng/pi-packages/issues"
+    "url": "https://github.com/brglng/pi-auto-review/issues"
   },
   "publishConfig": {
     "access": "public"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "files": [
     "src",
@@ -54,7 +53,7 @@
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.84.1",
     "@earendil-works/pi-coding-agent": "^0.84.1",
-    "@gotgenes/pi-permission-system": "^27.0.0",
+    "@gotgenes/pi-permission-system": "27.1.0",
     "@types/node": "^26.2.0",
     "typescript": "^6.0.3"
   }

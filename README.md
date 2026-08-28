@@ -29,6 +29,7 @@ that dependency is a hard prerequisite (see [Install and enable](#install-and-en
 - [Reviewer context and token budgets](#reviewer-context-and-token-budgets)
 - [Sandbox integration](#sandbox-integration)
 - [Trust boundary](#trust-boundary)
+- [Permission policy audit](#permission-policy-audit)
 - [Telemetry](#telemetry)
 - [Real-model smoke test](#real-model-smoke-test)
 
@@ -37,7 +38,11 @@ that dependency is a hard prerequisite (see [Install and enable](#install-and-en
 > **Prerequisite:** pi-auto-review is an authorizer inside
 > `@gotgenes/pi-permission-system`. Pi does not auto-install peer packages, so
 > install the permission system separately (once per machine) before this
-> extension. Version 0.11.0 requires permission-system 27.x:
+> extension. Version 0.10.0 requires permission-system 27.x:
+
+Node.js 22.13.0 or newer is required. Permission auditing uses Node's built-in
+`node:sqlite`; it does not require a SQLite CLI, system SQLite library, or npm
+SQLite package.
 
 ```bash
 pi install npm:@gotgenes/pi-permission-system
@@ -107,6 +112,12 @@ Use the user-global file for normal customization. It may set any legal key:
 }
 ```
 
+For a complete `@gotgenes/pi-permission-system` config that wires
+`pi-auto-review` into the authorizer chain — a copyable baseline covering
+read/write/edit, a read-only bash allowlist, an MCP discovery policy, and a
+`path` deny block for secret and credential files — see
+[`examples/pi-permission-system.config.example.json`](examples/pi-permission-system.config.example.json).
+
 Package defaults:
 
 ```json
@@ -123,7 +134,11 @@ Package defaults:
   "breakGlassEnabled": true,
   "failureMode": "deny",
   "grantTtlMs": 60000,
-  "autoConfirmBoundedAllows": ["external_directory", "path"]
+  "autoConfirmBoundedAllows": ["external_directory", "path"],
+  "policyAudit": {
+    "enabled": true,
+    "retentionDays": 180
+  }
 }
 ```
 
@@ -137,18 +152,22 @@ and grant TTL, set `failureMode` to `"deny"`, set `breakGlassEnabled` to
 select a model, raise a trusted limit, or weaken fail-closed behavior. Invalid
 configuration disables the reviewer for that session.
 
+The trusted user config may set `policyAudit.enabled` and a retention of
+1–3,650 days. Project config may only set `enabled: false` or shorten the
+inherited retention; it cannot re-enable globally disabled collection or
+extend retention.
+
 ### Deadlines and retries
 
 `timeoutMs` is one deadline shared by model resolution, authentication, model
 attempts, and retry delays. Each attempt receives only the remaining time.
-Provider-internal retries are disabled. In this fork the public `retries`
-value has no upper bound: a review makes at most `retries + 1` actual model
-calls, and the shared deadline still bounds every attempt and retry delay.
+Provider-internal retries are disabled. A review may make up to
+`retries + 1` actual model calls.
 
 Valid decisions, output-length stops, timeouts, aborts, authentication/model/
 request errors, and unknown failures do not retry. Empty, non-JSON, or
 schema-invalid output and recognized connection, temporary 5xx, or 429
-failures may retry while the configured retry budget and deadline allow it. A
+failures may retry once when the retry budget and deadline allow it. A
 `Retry-After` above five seconds or beyond the remaining deadline fails closed.
 Format retries preserve the canonical request and selected evidence and append
 only a fixed, budget-checked schema correction.
@@ -293,7 +312,8 @@ This package exposes the broker contract but does not intercept OS sandbox
 events itself. Adapters translate a concrete boundary into a `BoundaryRequest`
 and consume the exact grant before allowing it.
 
-This monorepo's `pi-sandbox` adapter uses Anthropic Sandbox Runtime. Filesystem
+Sandbox adapters such as a `pi-sandbox` adapter built on Anthropic Sandbox
+Runtime use the broker this way: filesystem
 policy is static and fail-closed; unmatched public network destinations use the
 broker for one connection. Each Bash command or built-in subagent session owns
 an independent Sandbox Runtime broker process. Adapter implementations should
@@ -314,6 +334,76 @@ PI_AUTO_REVIEW_ALLOW_UNTRUSTED_DEV=1 pi --approve
 Writes to the installed reviewer package, its user-global configuration,
 project and global security configuration, and the global audit directory are
 deterministically denied.
+
+## Permission policy audit
+
+The extension observes terminal `permissions:decision` broadcasts and stores
+only daily, redacted aggregates. Collection is enabled by default and retains
+180 days. It starts when this version first initializes successfully; no
+permission-system JSONL or RTK history is read or imported.
+
+Before storage, Bash values become observed command templates such as
+`git status --short`, `cat *`, or `npm test * --token *`. URLs, paths,
+assignments, quoted values, and option values are replaced with `*`; safe bare
+command words remain in plaintext so the report can emit a matching rule.
+Paths used for path-surface statistics become only
+`workspace`, `temp`, `home`, `external`, `sensitive`, or `unknown`. Request IDs,
+project locations, and matched-rule patterns are HMACed. Syntactically valid
+custom tool names are also retained in plaintext; invalid names stay anonymous
+as `<custom-tool>`. The database never stores raw commands, raw paths,
+URLs, credentials, or non-Bash tool arguments and inputs. Because safe bare Bash
+words are retained, command templates can contain non-secret filenames or
+project-specific labels; inspect suggestions before copying them.
+
+Data lives at
+`~/.pi/agent/extensions/pi-auto-review/policy-audit.sqlite`, beside an
+owner-only HMAC key. The directory is mode `0700`; the key, database, WAL, and
+SHM are mode `0600`. Initialization, lock, write, or corruption failures disable
+auditing and warn once without changing any permission result. A corrupt
+database is not deleted or rebuilt automatically. Disable new collection with:
+
+```json
+{
+  "policyAudit": { "enabled": false }
+}
+```
+
+Run `/auto-review-policy-audit` for a durable TUI report that is not sent to the
+LLM. Options are `--days 1..retention`, `--top 1..50`, `--min-count >=1`, and
+`--scope current|all`; defaults are `30`, `20`, `5`, and `current`.
+
+In addition to the redacted statistics, the report proposes copyable
+permission-system fragments. `--scope current` targets
+`.pi/extensions/pi-permission-system/config.json`; `--scope all` targets
+`~/.pi/agent/extensions/pi-permission-system/config.json`. The extension never
+reads, edits, or rewrites either file. Merge suggested Bash patterns into the
+existing `permission.bash` map and place the narrow allow entries after broader
+matching ask entries, because permission-system uses last-match-wins.
+
+Suggestions are discovered entirely from observed audit data; there is no
+built-in tool, executable, Git action, package-manager action, or read-only
+command catalog. Every valid observed permission surface and reliably templated
+Bash command can qualify, including previously unknown tools and write
+operations. Environment prefixes, compound syntax, pipelines, redirection,
+path executables, and unreliable parsing block that Bash template. Forwarded
+requests are statistics-only because the requester's cwd is not available. A
+candidate needs at least `--min-count` successful ask-path approvals and no
+denial, gate error, unavailable confirmation, blocked structural variant, or
+forwarded-only evidence in the selected window. Existing policy/infrastructure
+allows do not count as evidence of user friction. Repeated approval is evidence
+of user preference, not independent proof that a capability is safe.
+
+Schema v2 migrates v1 aggregates transactionally. Old totals remain visible,
+`collecting_since` is preserved, and `recommendations_since` records when safe
+recommendation evidence began; pre-migration data cannot produce a suggestion.
+
+The report is an extension-owned custom entry. It is deliberately not exposed
+as an Agent tool or packaged skill, so neither a tool schema nor skill metadata
+is added to the model context. Permission changes remain a separate, explicit
+user operation.
+
+`PI_AUTO_REVIEW_AUDIT_FILE` remains a test/release observation sink. It is not
+an input to this audit and supplies no RTK token or parsing metrics.
 
 ## Telemetry
 

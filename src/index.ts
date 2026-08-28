@@ -65,6 +65,14 @@ export {
   type SandboxRequestContext,
 } from "./integrations/sandbox.ts";
 import { parseHostPort } from "./integrations/sandbox.ts";
+import {
+  parsePolicyAuditArguments,
+  PolicyAuditController,
+  type PermissionDecisionLike,
+  type PolicyAuditArguments,
+  type PolicyAuditConfig,
+} from "./policy-audit/index.ts";
+import { isPathSurface, pathSurfaceInfo } from "./path-surfaces.ts";
 export { parseHostPort };
 
 type ReasoningLevel =
@@ -92,6 +100,7 @@ export type Config = {
   failureMode: "deny" | "defer";
   grantTtlMs: number;
   autoConfirmBoundedAllows: readonly BoundedSurface[];
+  policyAudit: Readonly<PolicyAuditConfig>;
 };
 
 type CompletionMessage = {
@@ -296,6 +305,7 @@ const DEFAULT_CONFIG: Config = {
   failureMode: "deny",
   grantTtlMs: 60_000,
   autoConfirmBoundedAllows: Object.freeze(["external_directory", "path"]),
+  policyAudit: Object.freeze({ enabled: true, retentionDays: 180 }),
 };
 
 function writeOptionalAuditFile(event: unknown): void {
@@ -364,6 +374,7 @@ function validateConfig(value: unknown, source: string): Config {
     "failureMode",
     "grantTtlMs",
     "autoConfirmBoundedAllows",
+    "policyAudit",
   ]);
   const unknownKeys = Object.keys(raw).filter((key) => !allowedKeys.has(key));
   if (unknownKeys.length > 0) {
@@ -372,6 +383,10 @@ function validateConfig(value: unknown, source: string): Config {
     );
   }
   const config = { ...DEFAULT_CONFIG, ...raw };
+  config.policyAudit = {
+    ...DEFAULT_CONFIG.policyAudit,
+    ...(raw.policyAudit as Partial<PolicyAuditConfig> | undefined),
+  };
   if (
     typeof config.model !== "string" ||
     !config.model.trim() ||
@@ -404,7 +419,9 @@ function validateConfig(value: unknown, source: string): Config {
     throw new Error(`${EXTENSION_NAME}: maxTokens must be 256..4096`);
   }
   if (!Number.isInteger(config.retries) || config.retries < 0) {
-    throw new Error(`${EXTENSION_NAME}: retries must be a non-negative integer`);
+    throw new Error(
+      `${EXTENSION_NAME}: retries must be a non-negative integer`,
+    );
   }
   if (!["deny", "defer"].includes(config.failureMode)) {
     throw new Error(`${EXTENSION_NAME}: failureMode must be deny or defer`);
@@ -449,11 +466,25 @@ function validateConfig(value: unknown, source: string): Config {
       `${EXTENSION_NAME}: maxReviewerInputTokens must be 2048..32768`,
     );
   }
+  if (raw.policyAudit !== undefined &&
+      (!raw.policyAudit || typeof raw.policyAudit !== "object" || Array.isArray(raw.policyAudit))) {
+    throw new Error(`${EXTENSION_NAME}: policyAudit must be an object`);
+  }
+  const policyAuditKeys = Object.keys((raw.policyAudit ?? {}) as Record<string, unknown>);
+  if (policyAuditKeys.some((key) => key !== "enabled" && key !== "retentionDays")) {
+    throw new Error(`${EXTENSION_NAME}: policyAudit only accepts enabled and retentionDays`);
+  }
+  if (typeof config.policyAudit.enabled !== "boolean" ||
+      !Number.isInteger(config.policyAudit.retentionDays) ||
+      config.policyAudit.retentionDays < 1 || config.policyAudit.retentionDays > 3_650) {
+    throw new Error(`${EXTENSION_NAME}: policyAudit requires enabled boolean and retentionDays 1..3650`);
+  }
   return {
     ...config,
     autoConfirmBoundedAllows: Object.freeze([
       ...config.autoConfirmBoundedAllows,
     ]),
+    policyAudit: Object.freeze({ ...config.policyAudit }),
   };
 }
 
@@ -504,11 +535,20 @@ export function applyUserConfig(
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${EXTENSION_NAME}: ${source} must be an object`);
   }
+  const overlay = value as Record<string, unknown>;
+  if (overlay.policyAudit !== undefined &&
+      (!overlay.policyAudit || typeof overlay.policyAudit !== "object" || Array.isArray(overlay.policyAudit))) {
+    throw new Error(`${EXTENSION_NAME}: ${source} policyAudit must be an object`);
+  }
   return validateConfig(
     {
       ...packageConfig,
       autoConfirmBoundedAllows: [...packageConfig.autoConfirmBoundedAllows],
-      ...(value as Record<string, unknown>),
+      ...overlay,
+      policyAudit: {
+        ...packageConfig.policyAudit,
+        ...(overlay.policyAudit as object | undefined),
+      },
     },
     source,
   );
@@ -573,6 +613,7 @@ export function applyProjectConfig(
     "breakGlassEnabled",
     "failureMode",
     "autoConfirmBoundedAllows",
+    "policyAudit",
   ]);
   const forbidden = Object.keys(raw).filter((key) => !allowed.has(key));
   if (forbidden.length > 0) {
@@ -629,6 +670,27 @@ export function applyProjectConfig(
       ...new Set(raw.autoConfirmBoundedAllows as BoundedSurface[]),
     ];
   }
+  if (raw.policyAudit !== undefined) {
+    if (!raw.policyAudit || typeof raw.policyAudit !== "object" || Array.isArray(raw.policyAudit)) {
+      throw new Error(`${EXTENSION_NAME}: project policyAudit must be an object`);
+    }
+    const audit = raw.policyAudit as Record<string, unknown>;
+    const forbiddenAuditKeys = Object.keys(audit).filter((key) => key !== "enabled" && key !== "retentionDays");
+    if (forbiddenAuditKeys.length > 0) {
+      throw new Error(`${EXTENSION_NAME}: project policyAudit cannot set: ${forbiddenAuditKeys.join(", ")}`);
+    }
+    if (audit.enabled !== undefined && audit.enabled !== false) {
+      throw new Error(`${EXTENSION_NAME}: project policyAudit may only disable collection`);
+    }
+    if (audit.retentionDays !== undefined &&
+        (!Number.isInteger(audit.retentionDays) || Number(audit.retentionDays) < 1 || Number(audit.retentionDays) > trusted.policyAudit.retentionDays)) {
+      throw new Error(`${EXTENSION_NAME}: project policyAudit.retentionDays may only shorten retention`);
+    }
+    merged.policyAudit = {
+      enabled: audit.enabled === false ? false : trusted.policyAudit.enabled,
+      retentionDays: audit.retentionDays === undefined ? trusted.policyAudit.retentionDays : Number(audit.retentionDays),
+    };
+  }
   return Object.freeze(validateConfig(merged, "effective project config"));
 }
 
@@ -642,6 +704,7 @@ function protectedWriteHardDeny(
 ): { rule: string; reason: string } | undefined {
   const isWrite =
     request.surface === "filesystem-write" ||
+    pathSurfaceInfo(request.surface)?.effect === "write" ||
     /\b(?:write|create|delete|rename|chmod|chown)\b/i.test(
       request.operation,
     );
@@ -718,7 +781,7 @@ function sessionConfig(
 }
 
 function boundedRequest(surface: string): boolean {
-  return BOUNDED_SURFACES.has(surface);
+  return isPathSurface(surface);
 }
 
 type PermissionsService = {
@@ -741,7 +804,7 @@ function boundaryRequest(
   const surface = evidence.surface;
   const value =
     evidence.resolvedPath ??
-    (surface === "path" || surface === "external_directory"
+    (isPathSurface(surface)
       ? evidence.path
       : evidence.command ?? evidence.value ?? evidence.destination) ??
     details.skillName ??
@@ -756,7 +819,6 @@ function boundaryRequest(
       ? deterministicPolicy
       : JSON.stringify(deterministicPolicy);
   const destParsed = parseHostPort(evidence.destination);
-  // SAFETY: permission details may include toolCallId at runtime although older typings omit it.
   return {
     id: details.requestId,
     source: "permission-system",
@@ -769,6 +831,7 @@ function boundaryRequest(
     destination: evidence.destination,
     destinationHost: destParsed?.host,
     destinationPort: destParsed?.port,
+    // SAFETY: permission details may include toolCallId at runtime although older typings omit it.
     toolCallId:
       typeof (details as unknown as Record<string, unknown>).toolCallId ===
       "string"
@@ -1873,7 +1936,7 @@ function currentTurnScope(ctx: ExtensionContext): string {
         return false;
       }
       // SAFETY: session entries are runtime-shaped objects; inspect message only after this structural boundary.
-    const message = (entry as unknown as Record<string, unknown>).message;
+      const message = (entry as unknown as Record<string, unknown>).message;
       return (
         Boolean(message) &&
         typeof message === "object" &&
@@ -1907,6 +1970,33 @@ export type PiAutoReviewExtensionOptions = {
   allowUntrustedWorkspace?: boolean;
 };
 
+const POLICY_AUDIT_ENTRY_TYPE = "pi-auto-review-policy-audit";
+
+function renderPolicyAuditEntry(
+  entry: { data?: unknown },
+  _options: unknown,
+  theme: { fg(color: string, text: string): string },
+): { render(width: number): string[]; invalidate(): void } | undefined {
+  const markdown = entry.data && typeof entry.data === "object" &&
+      typeof (entry.data as { markdown?: unknown }).markdown === "string"
+    ? (entry.data as { markdown: string }).markdown
+    : undefined;
+  if (!markdown) return undefined;
+  return {
+    render(width: number) {
+      const max = Math.max(20, width - 2);
+      return markdown.split("\n").flatMap((line) => {
+        const output: string[] = [];
+        for (let offset = 0; offset < Math.max(1, line.length); offset += max) {
+          output.push(theme.fg("muted", line.slice(offset, offset + max)));
+        }
+        return output;
+      });
+    },
+    invalidate() {},
+  };
+}
+
 export function createPiAutoReviewExtension(
   options: PiAutoReviewExtensionOptions = {},
 ): (pi: ExtensionAPI) => void {
@@ -1922,6 +2012,7 @@ export function createPiAutoReviewExtension(
   return (pi: ExtensionAPI): void => {
   try {
     pi.registerEntryRenderer(USER_REVIEW_ENTRY_TYPE, renderUserReviewEntry);
+    pi.registerEntryRenderer(POLICY_AUDIT_ENTRY_TYPE, renderPolicyAuditEntry);
   } catch {
     // Renderer registration is observational.
   }
@@ -1942,6 +2033,36 @@ export function createPiAutoReviewExtension(
     () => config.autoConfirmBoundedAllows,
   );
   const reviewWidget = new UserReviewWidgetController();
+  const policyAudit = new PolicyAuditController({
+    config: () => config.policyAudit,
+    cwd: () => context?.cwd,
+    warn: (message) => {
+      console.error(message);
+      notifyUserReview(context, { type: "warning", message });
+    },
+  });
+
+  const runPolicyAuditReport = async (args: PolicyAuditArguments) =>
+    policyAudit.report(args);
+
+  pi.registerCommand("auto-review-policy-audit", {
+    description: "Show a persistent, redacted permission-policy audit report",
+    handler: async (rawArgs, ctx) => {
+      try {
+        const args = parsePolicyAuditArguments(rawArgs, config.policyAudit.retentionDays);
+        const result = await runPolicyAuditReport(args);
+        pi.appendEntry(POLICY_AUDIT_ENTRY_TYPE, {
+          markdown: result.markdown,
+          report: result.report,
+        });
+      } catch (error) {
+        ctx.ui.notify(
+          `Permission policy audit unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          "warning",
+        );
+      }
+    },
+  });
 
   const emitTelemetry = (event: ReviewerTelemetryEvent): void => {
     writeOptionalAuditFile(event);
@@ -2294,6 +2415,7 @@ export function createPiAutoReviewExtension(
       );
       context = ctx;
       broker = createBroker();
+      policyAudit.warmup();
       try {
         disposeBrokerService = publishBoundaryBroker(broker);
       } catch (error) {
@@ -2326,6 +2448,7 @@ export function createPiAutoReviewExtension(
 
   pi.events.on("permissions:decision", (event) => {
     reviewWidget.permissionDecision(event);
+    policyAudit.record(event as PermissionDecisionLike);
   });
 
   pi.events.on("permissions:ready", (event) => {
@@ -2522,7 +2645,7 @@ export function createPiAutoReviewExtension(
     }
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
     shuttingDown = true;
     registrationEpoch++;
     reviewWidget.clear(context);
@@ -2536,6 +2659,7 @@ export function createPiAutoReviewExtension(
     reviewResults.clear();
     uiAutoConfirmer.clear();
     context = undefined;
+    await policyAudit.close();
   });
   };
 }

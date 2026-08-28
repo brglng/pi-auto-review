@@ -1,15 +1,72 @@
 # Changelog
 
-## 0.11.0-brglng.1 - 2026-08-24
+## 0.14.0-brglng.1 - 2026-08-28
 
-- **Reset to upstream 0.11.0.** Replace the fork with the published
-  `@erichll/pi-auto-review` 0.11.0 snapshot, keeping only the
-  `@brglng/pi-auto-review` package identity and README fork notice.
+- **Reset to upstream 0.14.0.** Replace the fork with the published
+  `@erichll/pi-auto-review` 0.14.0 snapshot, keeping the
+  `@brglng/pi-auto-review` package identity, README fork notice, and the
+  unlimited-retries change.
 - **Unlimited configured retries.** Remove the `retries` upper bound: any
   non-negative integer is accepted and a review may make up to `retries + 1`
   actual model calls. The shared `timeoutMs` deadline, abort handling,
   `Retry-After` cap, and fail-closed behavior are unchanged, and the default
   remains `retries: 2`.
+
+## 0.14.0 - 2026-08-28
+
+- Upgrade `/auto-review-policy-audit` from redacted statistics to an
+  evidence-driven permission-configuration optimizer. Reports now separate
+  suggested allow rules, keep-ask rules, and insufficient evidence, and emit a
+  copyable JSON fragment targeting the selected project or global
+  permission-system configuration. Suggestions remain advisory and never read
+  or modify permission configuration.
+- Discover candidates from actual audit data without built-in tool, executable,
+  Git, RTK, package-manager, or read-only command catalogs. Valid observed
+  surfaces and sanitized Bash templates—including unknown tools and write
+  operations—can qualify after the configured minimum number of successful
+  ask-path approvals. Denials, gate failures, unavailable confirmations,
+  forwarded requests, and structurally unsafe Bash variants block a suggestion.
+- Migrate the policy-audit database transactionally to schema v2. Existing
+  aggregate counts and `collecting_since` are preserved, while the new
+  `recommendations_since` boundary prevents pre-migration data from producing
+  allow suggestions. Valid custom tool names and sanitized Bash templates are
+  retained for reporting. Templates replace paths, URLs, assignments, quoted
+  values, and option values with wildcards; raw commands and non-Bash tool
+  arguments or inputs remain excluded.
+
+## 0.13.0 - 2026-08-28
+
+- Add compatibility with `@gotgenes/pi-permission-system` 27.1 directional
+  `path_*` and `external_directory_*` surfaces while retaining the original
+  surface in authorization evidence, UI binding, logs, and policy audits.
+- Keep the permission-system peer range at `^27.0.0` so existing 27.x bare
+  `path` and `external_directory` integrations remain supported.
+
+## 0.12.0 - 2026-08-27
+
+- Add the private policy audit
+  compare current-project or anonymous global surface/command hotspots, denial
+  rates, approval sources, and rule-hit fingerprints; then review repeatedly
+  approved read-only operations as candidates for narrowly scoped `allow`
+  rules. Mutation, project execution, network, arbitrary-shell, unknown, and
+  custom-tool activity is called out as keep-`ask` evidence rather than an
+  automatic relaxation. The report does not edit policy or claim that an
+  unobserved rule is unused.
+- Add default-on, 180-day permission-policy auditing backed by built-in
+  `node:sqlite`. Permission decisions are immediately reduced to fixed command,
+  risk, path-class, source, and anonymous rule-hit aggregates; raw commands,
+  paths, URLs, credentials, request IDs, and project names are never stored.
+- Add `/auto-review-policy-audit` as an extension-owned custom-entry report.
+  It is not registered as an Agent tool or packaged skill, so audit reporting
+  adds no tool schema or skill metadata to the model context. Reports default
+  to the current project and can explicitly show an anonymous global aggregate.
+- Require Node.js 22.13.0 or newer. No SQLite CLI, system library, npm SQLite
+  package, RTK, or historical permission-log import is required.
+
+## 0.11.1 - 2026-08-25
+
+- Align the package version with `@erichll/pi-sandbox` `0.11.1`. No
+  pi-auto-review runtime or public API changes.
 
 ## 0.11.0 - 2026-08-24
 
