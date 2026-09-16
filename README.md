@@ -24,7 +24,7 @@ that dependency is a hard prerequisite (see [Install and enable](#install-and-en
 - [Install and enable](#install-and-enable)
 - [Security model](#security-model)
 - [Configuration](#configuration)
-  - [Deadlines and retries](#deadlines-and-retries)
+  - [Timeouts and retries](#timeouts-and-retries)
 - [Operator feedback and exact retry](#operator-feedback-and-exact-retry)
 - [Boundary broker API](#boundary-broker-api)
 - [Reviewer context and token budgets](#reviewer-context-and-token-budgets)
@@ -153,7 +153,7 @@ Package defaults:
 terminal. Set `autoConfirmBoundedAllows` to `[]` to keep every bounded allow
 manual.
 
-Project configuration may only lower timeouts, token/evidence limits, retries,
+Project configuration may only lower per-attempt timeouts, token/evidence limits, retries,
 and grant TTL, set `failureMode` to `"deny"`, set `breakGlassEnabled` to
 `false`, or remove auto-confirmed surfaces. It cannot re-enable break glass,
 select a model, raise a trusted limit, or weaken fail-closed behavior. Invalid
@@ -164,28 +164,26 @@ The trusted user config may set `policyAudit.enabled` and a retention of
 inherited retention; it cannot re-enable globally disabled collection or
 extend retention.
 
-### Deadlines and retries
+### Timeouts and retries
 
-`timeoutMs` is one deadline shared by model resolution, authentication, model
-attempts, and retry delays. Each attempt receives only the remaining time.
-Provider-internal retries are disabled. A review may make up to
-`retries + 1` actual model calls.
+`timeoutMs` is the timeout budget for each attempt. It covers that attempt's
+authentication resolution and model call, and resets to the full configured
+value for every retry. There is no overall review deadline. Provider-internal
+retries are disabled. A review may make up to `retries + 1` actual model calls.
 
 This fork raises the upstream `timeoutMs` ceiling to Node's timer maximum and
 removes the `retries` upper bound: `timeoutMs` is any integer from 1000 through
-`2_147_483_647` ms (upstream: 1000–120000), and `retries` is any non-negative
-integer (upstream: 0–2). The deadline timer remains within Node's supported
-delay range while allowing reviewer runs longer than 120 seconds; the shared
-deadline, `Retry-After` cap, and fail-closed behavior are unchanged.
-The defaults remain `timeoutMs: 90000` and `retries: 2`.
+`2_147_483_647` ms per attempt (upstream: 1000–120000), and `retries` is any
+non-negative integer (upstream: 0–2). The per-attempt timer remains within
+Node's supported delay range, while the configured retry count is the only
+review-level bound. The defaults remain `timeoutMs: 90000` and `retries: 2`.
 
-Valid decisions, output-length stops, timeouts, aborts, authentication/model/
-request errors, and unknown failures do not retry. Empty, non-JSON, or
+Valid decisions, output-length stops, aborts, authentication/model/request
+errors, and unknown failures do not retry. Timeouts, empty, non-JSON, or
 schema-invalid output and recognized connection, temporary 5xx, or 429
-failures may retry while the retry budget and deadline allow it. A
-`Retry-After` above five seconds or beyond the remaining deadline fails closed.
-Format retries preserve the canonical request and selected evidence and append
-only a fixed, budget-checked schema correction.
+failures may retry while the retry count allows it. A `Retry-After` above five
+seconds fails closed. Format retries preserve the canonical request and
+selected evidence and append only a fixed, budget-checked schema correction.
 
 ## Operator feedback and exact retry
 

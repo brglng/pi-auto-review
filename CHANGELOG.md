@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.18.1-brglng.3 - 2026-09-16
+
+- **Per-attempt review timeout.** Apply `timeoutMs` independently to each
+  authentication/model attempt and reset the full budget for every retry;
+  remove the overall review deadline.
+- **Retry timed-out attempts.** Treat per-attempt timeouts as retryable within
+  the configured `retries` count, while keeping late provider responses
+  fail-closed.
+- **Align timeout documentation and coverage.** Document the per-attempt
+  semantics and verify that retries receive a fresh timeout budget.
+
 ## 0.18.1-brglng.2 - 2026-09-15
 
 - **Fail closed after late reviewer responses.** Recheck the shared deadline and
