@@ -182,6 +182,9 @@ export function isRetryableError(errorClass: ReviewErrorClass): boolean {
     "transient_connection",
     "transient_server",
     "rate_limit",
+    // `timeoutMs` bounds one attempt, so a timed-out attempt can retry with
+    // its own full budget; `retries` is the only bound on total attempts.
+    "timeout",
   ].includes(errorClass);
 }
 

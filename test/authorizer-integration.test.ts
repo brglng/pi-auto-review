@@ -1192,7 +1192,7 @@ test("real permission-system authorizer chain integration", async (t) => {
         name: "provider timeout",
         first: { stopReason: "error", errorMessage: "request timed out" },
         expectedClass: "timeout",
-        expectedCalls: 1,
+        expectedCalls: 2,
       },
       {
         name: "authentication",
@@ -1398,7 +1398,7 @@ test("real permission-system authorizer chain integration", async (t) => {
     }
   });
 
-  await t.test("all attempts share one deadline and retries receive only remaining time", async () => {
+  await t.test("every attempt receives the configured timeout budget", async () => {
     let calls = 0;
     const instance = harness(async () => {
       calls++;
@@ -1407,14 +1407,14 @@ test("real permission-system authorizer chain integration", async (t) => {
     }, { config: config({ retries: 2, timeoutMs: 1_000 }) });
     try {
       const result = await instance.authorize("network", {
-        requestId: "shared-deadline",
+        requestId: "per-attempt-timeout",
       });
       assert.equal(result.decision.approved, true);
       assert.equal(instance.modelCallOptions.length, 2);
-      const first = instance.modelCallOptions[0].timeoutMs as number;
-      const second = instance.modelCallOptions[1].timeoutMs as number;
-      assert.ok(first <= 1_000 && first > 0);
-      assert.ok(second < first - 150, `${second} should be below ${first}`);
+      assert.deepEqual(
+        instance.modelCallOptions.map((options) => options.timeoutMs),
+        [1_000, 1_000],
+      );
     } finally {
       instance.dispose();
     }
@@ -2308,15 +2308,18 @@ test("real permission-system authorizer chain integration", async (t) => {
       timeout.dispose();
     }
 
+    const lateStarted = Date.now();
     const late = harness(
       () =>
         new Promise<string>((resolve) => {
-          setTimeout(() => resolve(allow), 1_050);
+          const timer = setTimeout(() => resolve(allow), 1_500);
+          timer.unref();
         }),
       { config: config({ timeoutMs: 1_000 }) },
     );
     try {
       const result = await late.authorize("bash_escalated");
+      assert.ok(Date.now() - lateStarted < 1_400);
       assert.equal(result.decision.approved, false);
       const attempt = late.telemetry.find(
         (event) => event.type === "review_attempt",
@@ -2347,25 +2350,68 @@ test("real permission-system authorizer chain integration", async (t) => {
     }
   });
 
-  await t.test("the shared deadline also bounds authentication resolution", async () => {
+  await t.test("a retry starts with a fresh timeout budget after a timed-out attempt", async () => {
+    let calls = 0;
+    const instance = harness(
+      (signal) =>
+        new Promise<string>((resolve, reject) => {
+          calls++;
+          if (calls === 1) {
+            signal.addEventListener(
+              "abort",
+              () => reject(new Error("aborted")),
+              { once: true },
+            );
+            return;
+          }
+          resolve(allow);
+        }),
+      { config: config({ retries: 1, timeoutMs: 1_000 }) },
+    );
+    try {
+      const result = await instance.authorize("network", {
+        requestId: "retry-after-timeout",
+      });
+      assert.equal(result.decision.approved, true);
+      assert.equal(instance.modelCallOptions.length, 2);
+      assert.deepEqual(
+        instance.modelCallOptions.map((options) => options.timeoutMs),
+        [1_000, 1_000],
+      );
+      const attempts = instance.telemetry.filter(
+        (event) => event.type === "review_attempt",
+      );
+      assert.deepEqual(
+        attempts.map((event) => [event.status, event.errorClass, event.willRetry]),
+        [
+          ["timeout", "timeout", true],
+          ["success", "none", false],
+        ],
+      );
+    } finally {
+      instance.dispose();
+    }
+  });
+
+  await t.test("the per-attempt timeout also bounds authentication resolution", async () => {
     const instance = harness(allow, {
-      config: config({ retries: 2, timeoutMs: 1_000 }),
+      config: config({ retries: 0, timeoutMs: 1_000 }),
       authBehavior: () => new Promise(() => undefined),
     });
     const started = Date.now();
     try {
       const result = await instance.authorize("network", {
-        requestId: "authentication-deadline",
+        requestId: "authentication-timeout",
       });
       assert.equal(result.decision.approved, false);
       assert.ok(Date.now() - started < 1_500);
       assert.equal(instance.modelContexts.length, 0);
-      assert.equal(
-        instance.telemetry.filter(
-          (event) => event.type === "review_attempt",
-        ).length,
-        0,
+      const attempts = instance.telemetry.filter(
+        (event) => event.type === "review_attempt",
       );
+      assert.equal(attempts.length, 1);
+      assert.equal(attempts[0]?.status, "timeout");
+      assert.equal(attempts[0]?.errorClass, "timeout");
       const completion = instance.telemetry.find(
         (event) => event.type === "review_complete",
       );

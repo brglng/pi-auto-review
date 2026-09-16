@@ -87,16 +87,13 @@ export async function complete(
     sharedContext,
     config.maxReviewerInputTokens,
   );
-  const deadlineAt = started + config.timeoutMs;
+  // The outer controller is cancelled only by the session, so it stays
+  // aborted for the rest of the review. Each attempt adds its own controller
+  // for the per-attempt `timeoutMs` budget.
   const controller = new AbortController();
   const onSessionAbort = () => controller.abort();
   if (ctx.signal?.aborted) controller.abort();
   else ctx.signal?.addEventListener("abort", onSessionAbort, { once: true });
-  let timeoutFired = false;
-  const timeout = setTimeout(() => {
-    timeoutFired = true;
-    controller.abort();
-  }, Math.max(0, deadlineAt - Date.now()));
   const attempts: ReviewAttemptObservation[] = [];
   const errorCounts: ReviewExecutionSummary["errorCounts"] = {};
 
@@ -130,7 +127,7 @@ export async function complete(
       meta = await abortableOperation(resolve(ctx, config), controller.signal);
     } catch {
       const errorClass = controller.signal.aborted
-        ? timeoutFired ? "timeout" : "abort"
+        ? "abort"
         : "model_resolution";
       incrementError(errorCounts, errorClass);
       throw new ReviewExecutionError(errorClass, summary());
@@ -145,67 +142,73 @@ export async function complete(
       config.maxReviewerInputTokens;
     let formatRetry = false;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      let runtime: ReviewerRuntime;
-      try {
-        const auth = await abortableOperation(
-          resolveApiKeyAndHeaders(ctx, meta.model),
-          controller.signal,
-        );
-        runtime = {
-          ...meta,
-          auth,
-          sessionId: reviewerSessionId(ctx, config, meta.model, auth),
-        };
-      } catch (error) {
-        lastError = error;
-        lastErrorClass = controller.signal.aborted
-          ? timeoutFired ? "timeout" : "abort"
-          : "authentication";
-        retryErrors.push(lastErrorClass);
-        incrementError(errorCounts, lastErrorClass);
-        break;
-      }
-      if (controller.signal.aborted) {
-        lastErrorClass = timeoutFired ? "timeout" : "abort";
-        retryErrors.push(lastErrorClass);
-        incrementError(errorCounts, lastErrorClass);
-        break;
-      }
+      // Every attempt owns a fresh `timeoutMs` budget that covers its
+      // authentication resolution and its model call; a retry starts over
+      // with the full budget. `retries` is the only bound on how many
+      // attempts a review may spend. The outer controller still cancels every
+      // attempt when the session aborts.
+      const attemptController = new AbortController();
+      let attemptTimedOut = false;
+      const attemptTimeout = setTimeout(() => {
+        attemptTimedOut = true;
+        attemptController.abort();
+      }, config.timeoutMs);
+      const onOuterAbort = () => attemptController.abort();
+      if (controller.signal.aborted) attemptController.abort();
+      else controller.signal.addEventListener("abort", onOuterAbort, { once: true });
+      // A session abort outranks the per-attempt timeout, so a cancelled
+      // review is reported as an abort rather than a retryable timeout.
+      const cancelledClass = (): "abort" | "timeout" | undefined =>
+        controller.signal.aborted
+          ? "abort"
+          : attemptTimedOut
+            ? "timeout"
+            : undefined;
 
       const attemptStarted = Date.now();
       let message: CompletionMessage | undefined;
       let status: ReviewAttemptStatus = "transport_failure";
       let errorClass: ReviewErrorClass = "unknown";
       let decision: ModelDecision | undefined;
+      let runtime: ReviewerRuntime | undefined;
       const providerMetadata: ProviderAttemptMetadata = {};
       try {
-        const remainingMs = deadlineAt - Date.now();
-        if (remainingMs <= 0) {
-          timeoutFired = true;
-          controller.abort();
-          throw new Error("review deadline exhausted");
-        }
-        message = await modelCall(
-          runtime,
-          config,
-          controller,
-          sharedContext,
-          config.maxTokens,
-          remainingMs,
-          formatRetry,
-          providerMetadata,
+        const auth = await abortableOperation(
+          resolveApiKeyAndHeaders(ctx, meta.model),
+          attemptController.signal,
         );
-        if (Date.now() >= deadlineAt) {
-          timeoutFired = true;
-          controller.abort();
+        if (cancelledClass()) {
+          throw new Error("review attempt cancelled during authentication");
         }
-        if (controller.signal.aborted) {
-          throw new Error("reviewer completed after cancellation");
+        runtime = {
+          ...meta,
+          auth,
+          sessionId: reviewerSessionId(ctx, config, meta.model, auth),
+        };
+        message = await abortableOperation(
+          modelCall(
+            runtime,
+            config,
+            attemptController,
+            sharedContext,
+            config.maxTokens,
+            config.timeoutMs,
+            formatRetry,
+            providerMetadata,
+          ),
+          attemptController.signal,
+        );
+        // Fail closed when the attempt was cancelled while the provider was
+        // still resolving: a provider that ignores its abort signal must not
+        // be able to authorize a decision delivered after the attempt timed
+        // out or the session aborted.
+        if (cancelledClass()) {
+          throw new Error("review attempt cancelled before a decision");
         }
         if (message.stopReason !== "stop") {
           if (message.stopReason === "aborted") {
-            status = timeoutFired ? "timeout" : "abort";
-            errorClass = timeoutFired ? "timeout" : "abort";
+            status = "abort";
+            errorClass = "abort";
           } else {
             status = message.stopReason === "error"
               ? "transport_failure"
@@ -235,9 +238,12 @@ export async function complete(
         errorClass = "none";
       } catch (error) {
         lastError = error;
-        if (controller.signal.aborted) {
-          status = timeoutFired ? "timeout" : "abort";
-          errorClass = timeoutFired ? "timeout" : "abort";
+        const cancelled = cancelledClass();
+        if (cancelled) {
+          status = cancelled;
+          errorClass = cancelled;
+        } else if (!runtime) {
+          errorClass = "authentication";
         } else if (errorClass === "unknown") {
           errorClass = classifyProviderFailure(
             message,
@@ -245,6 +251,9 @@ export async function complete(
             providerMetadata,
           );
         }
+      } finally {
+        clearTimeout(attemptTimeout);
+        controller.signal.removeEventListener("abort", onOuterAbort);
       }
       const usage = observedUsage(message);
       const delayMs = retryDelayMs(errorClass, providerMetadata);
@@ -254,7 +263,9 @@ export async function complete(
         (!isFormatError(errorClass) || formatRetryFitsBudget) &&
         attempt < maxAttempts &&
         !controller.signal.aborted &&
-        deadlineAt - Date.now() > delayMs;
+        // A `Retry-After` beyond the cap is reported as an infinite delay;
+        // never retry on it.
+        Number.isFinite(delayMs);
       const observation: ReviewAttemptObservation = {
         attempt: attempts.length + 1,
         model: message?.responseModel || `${meta.model.provider}/${meta.model.id}`,
@@ -292,7 +303,7 @@ export async function complete(
       try {
         await abortableDelay(delayMs, controller.signal);
       } catch {
-        lastErrorClass = timeoutFired ? "timeout" : "abort";
+        lastErrorClass = "abort";
         incrementError(errorCounts, lastErrorClass);
         break;
       }
@@ -300,7 +311,6 @@ export async function complete(
     void lastError;
     throw new ReviewExecutionError(lastErrorClass, summary());
   } finally {
-    clearTimeout(timeout);
     ctx.signal?.removeEventListener("abort", onSessionAbort);
   }
 }
