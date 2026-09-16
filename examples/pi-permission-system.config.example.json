@@ -1,0 +1,119 @@
+{
+  "$schema": "https://raw.githubusercontent.com/gotgenes/pi-packages/main/packages/pi-permission-system/schemas/permissions.schema.json",
+
+  "debugLog": false,
+  "permissionReviewLog": true,
+  "yoloMode": false,
+  "doublePressToConfirm": true,
+  "piInfrastructureReadPaths": [
+    "~/.cargo/registry/*",
+    "~/.npm/*"
+  ],
+  "authorizerChain": [
+    "pi-auto-review"
+  ],
+  "permission": {
+    "*": "ask",
+    "external_directory": {
+      "*": "ask",
+      "/tmp": "allow",
+      "/tmp/*": "allow"
+    },
+    "external_directory_read": {
+      "~/.agents/skills/*": "allow",
+      "~/.pi/agent/skills/*": "allow"
+    },
+    "path": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow",
+      "*.pem": "deny",
+      "*.key": "deny",
+      "*.p12": "deny",
+      "*.pfx": "deny",
+      "*.jks": "deny",
+      "*.keystore": "deny",
+      ".envrc": "deny",
+      ".npmrc": "deny",
+      ".pypirc": "deny",
+      ".netrc": "deny",
+      ".git-credentials": "deny",
+      "id_rsa": "deny",
+      "id_ed25519": "deny",
+      ".git/config": "deny",
+      ".git/hooks/*": "deny",
+      "~/.ssh/*": "deny",
+      "~/.aws/*": "deny",
+      "~/.kube/*": "deny",
+      "~/.config/gcloud/*": "deny",
+      "~/.gnupg/*": "deny",
+      "~/.docker/config.json": "deny",
+      "~/.config/gh/hosts.yml": "deny",
+      "~/.azure/*": "deny",
+      "~/.pi/agent/auth.json": "deny",
+      "~/.pi/agent/cliproxyapi.json": "deny"
+    },
+    "read": "allow",
+    "grep": "allow",
+    "find": "allow",
+    "ls": "allow",
+    "write": {
+      "*": "allow",
+      "*.lock": "deny"
+    },
+    "edit": {
+      "*": "allow"
+    },
+    "bash": {
+      "*": "allow",
+      "mkfs*": "deny",
+      "shutdown *": "deny",
+      "poweroff *": "deny",
+      "halt *": "deny",
+      "dd *": "ask",
+      "reboot *": "ask",
+      "sudo *": "ask",
+      "doas *": "ask",
+      "crontab *": "ask",
+      "systemctl *": "ask",
+      "launchctl *": "ask",
+      "kill *": "ask",
+      "pkill *": "ask",
+      "killall *": "ask",
+      "chmod 777 *": "ask",
+      "chown *": "ask",
+      "sh": "ask",
+      "bash": "ask",
+      "zsh": "ask",
+      "git config *": "ask",
+      "git -c *": "ask",
+      "npm publish*": "ask",
+      "pip upload*": "ask",
+      "gh release create*": "ask"
+    },
+    "mcp": {
+      "*": "ask",
+      "mcp_status": "allow",
+      "mcp_list": "allow",
+      "mcp_search": "allow",
+      "mcp_describe": "allow",
+      "atlassian": "allow",
+      "atlassian:*": "allow",
+      "atlassian_*": "allow",
+      "jira_*": "allow",
+      "confluence_*": "allow"
+    },
+    "skill": {
+      "*": "allow"
+    },
+    "ask_user": "allow",
+    "mcpScript": "allow",
+    "todo": "allow",
+    "web_search": "allow",
+    "get_search_content": "allow",
+    "fetch_content": "ask",
+    "plan_mode_question": "allow",
+    "plan_mode_complete": "allow"
+  }
+}

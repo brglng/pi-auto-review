@@ -1,11 +1,35 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { BoundaryGrant, BoundaryRequest } from "./types.ts";
 
-function stableValue(value: unknown): unknown {
+// Retry stability: a retried action mints a fresh requestId and toolCallId (the
+// model issues a new tool call), so neither may take part in the exact-match
+// hash. Everything else must be identical for an authorization to apply.
+type StableValue =
+  | null
+  | boolean
+  | number
+  | string
+  | undefined
+  | StableValue[]
+  | { [key: string]: StableValue };
+
+function stableValue(value: unknown): StableValue {
   if (Array.isArray(value)) return value.map(stableValue);
-  if (!value || typeof value !== "object") return value;
+  if (value === null || value === undefined) return value;
+  if (
+    typeof value === "boolean" ||
+    typeof value === "number" ||
+    typeof value === "string"
+  ) {
+    return value;
+  }
+  if (typeof value !== "object") {
+    throw new TypeError("boundary request contains a non-JSON value");
+  }
+  // SAFETY: boundary request fields are JSON-shaped objects at this hash boundary.
+  const object = value as Record<string, unknown>;
   return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
+    Object.entries(object)
       .filter(([, child]) => child !== undefined)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, child]) => [key, stableValue(child)]),
@@ -25,7 +49,6 @@ export function boundaryRequestHash(request: BoundaryRequest): string {
     destinationHost: request.destinationHost,
     destinationPort: request.destinationPort,
     destinationProtocol: request.destinationProtocol,
-    toolCallId: request.toolCallId,
     toolName: request.toolName,
     skillName: request.skillName,
     toolInputPreview: request.toolInputPreview,

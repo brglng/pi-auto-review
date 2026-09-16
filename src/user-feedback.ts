@@ -3,6 +3,10 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 export const USER_REVIEW_STATUS_KEY = "pi-auto-review";
 export const USER_REVIEW_ENTRY_TYPE = "pi-auto-review";
 export const USER_REVIEW_WIDGET_KEY = "pi-auto-review";
+/** How long a successful completed widget stays above the editor. */
+export const USER_REVIEW_SUCCESS_WIDGET_TTL_MS = 8_000;
+/** Frame interval for the light sweep across the live `reviewing` label. */
+export const USER_REVIEW_SWEEP_INTERVAL_MS = 80;
 
 export type UserReviewOutcome =
   | "allow"
@@ -454,7 +458,7 @@ export function buildUserReviewGroupLines(
   data: UserReviewGroupEntryData,
 ): UserReviewEntryData {
   if (data.members.length === 1) {
-    const member = data.members[0];
+    const member = data.members[0]!;
     const lines = buildUserReviewLines(member);
     if (member.permissionResult === "deny" && member.outcome !== "deny") {
       lines.push("Local confirmation · denied");
@@ -543,8 +547,32 @@ export function notifyUserReview(
 }
 
 export type UserReviewWidgetData = UserReviewEntryData & {
-  phase: "reviewing" | "complete";
+  phase: "reviewing" | "waiting_user" | "complete";
 };
+
+/**
+ * Overlay shown while a `ctx.ui` prompt blocks the session during an active
+ * review. Without it the widget kept claiming "Waiting for <model>…" while
+ * pi was actually waiting on the user (permission dialog, /review-denials,
+ * break-glass challenge, ...). Driven by the notification-only
+ * `ui_prompt_start` / `ui_prompt_end` events (pi >= 0.84.4).
+ */
+export function buildUserWaitingWidgetData(input: {
+  kind?: unknown;
+  title?: unknown;
+}): UserReviewWidgetData {
+  const kind = typeof input.kind === "string" ? input.kind.trim() : "";
+  const title = typeof input.title === "string" ? input.title.trim() : "";
+  const label = truncateReviewText(title || kind || "input", 48);
+  return {
+    phase: "waiting_user",
+    outcome: "defer",
+    type: "info",
+    lines: joinNoticeLines([
+      `Auto-review · waiting for you · ${label}`,
+    ]),
+  };
+}
 
 export function buildUserReviewingWidgetData(input: {
   surface: string;
@@ -574,27 +602,54 @@ export function buildUserReviewWidgetData(
   };
 }
 
+const REVIEWING_LABEL = "reviewing";
+const REVIEWING_SWEEP_GAP_FRAMES = 4;
+
+/** Paint one left-to-right shimmer frame without changing the label width. */
+export function renderReviewingSweep(
+  theme: UserReviewTheme,
+  frame: number,
+): string {
+  const center = Math.abs(Math.trunc(frame)) %
+      (REVIEWING_LABEL.length + REVIEWING_SWEEP_GAP_FRAMES) - 2;
+  return [...REVIEWING_LABEL].map((character, index) => {
+    const distance = Math.abs(index - center);
+    const color = distance === 0
+      ? "accent"
+      : distance === 1
+      ? "muted"
+      : "dim";
+    return `${theme.getFgAnsi(color)}${character}`;
+  }).join("") + "\x1b[0m";
+}
+
 export function renderUserReviewWidgetLines(
   data: UserReviewWidgetData,
   theme: UserReviewTheme,
   width: number,
+  reviewingFrame = 0,
 ): string[] {
   const rendered: string[] = [];
   const verb = data.phase === "reviewing"
-    ? "reviewing"
+    ? REVIEWING_LABEL
+    : data.phase === "waiting_user"
+    ? "waiting"
     : outcomeVerb(data.outcome);
-  const accent = data.phase === "reviewing"
-    ? "muted"
-    : outcomeAccent(data.outcome);
+  const accent = data.phase === "complete"
+    ? outcomeAccent(data.outcome)
+    : "muted";
   const verbAnsi = theme.getFgAnsi(accent);
   const mutedAnsi = theme.getFgAnsi("muted");
   for (const [index, line] of data.lines.entries()) {
     for (const visual of wrapReviewDisplayText(line, Math.max(1, width))) {
       let painted = `${mutedAnsi}${visual}\x1b[0m`;
       if (index === 0) {
+        const paintedVerb = data.phase === "reviewing"
+          ? renderReviewingSweep(theme, reviewingFrame)
+          : `${verbAnsi}${verb}\x1b[0m`;
         painted = painted.replace(
           verb,
-          `${verbAnsi}${verb}\x1b[0m${mutedAnsi}`,
+          `${paintedVerb}${mutedAnsi}`,
         );
       }
       rendered.push(painted);
@@ -612,11 +667,24 @@ function setWidget(
     ctx.ui.setWidget(
       USER_REVIEW_WIDGET_KEY,
       data
-        ? (_tui, theme) => ({
-            render: (width: number) =>
-              renderUserReviewWidgetLines(data, theme, width),
-            invalidate() {},
-          })
+        ? (tui, theme) => {
+            let frame = 0;
+            const interval = data.phase === "reviewing"
+              ? setInterval(() => {
+                  frame++;
+                  tui.requestRender();
+                }, USER_REVIEW_SWEEP_INTERVAL_MS)
+              : undefined;
+            interval?.unref?.();
+            return {
+              render: (width: number) =>
+                renderUserReviewWidgetLines(data, theme, width, frame),
+              invalidate() {},
+              dispose() {
+                if (interval !== undefined) clearInterval(interval);
+              },
+            };
+          }
         : undefined,
       { placement: "aboveEditor" },
     );
@@ -626,9 +694,16 @@ function setWidget(
   }
 }
 
+function isTransientCompletedOutcome(outcome: UserReviewOutcome): boolean {
+  return outcome === "allow" || outcome === "auto_confirm";
+}
+
 /** Owns the single live widget and rejects stale concurrent completions. */
 export class UserReviewWidgetController {
   #generation = 0;
+  #dismissTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Set while a `ctx.ui` prompt blocks the session (ui_prompt span). */
+  #waiting?: { kind?: unknown; title?: unknown };
   #current?: {
     requestId: string;
     generation: number;
@@ -636,6 +711,9 @@ export class UserReviewWidgetController {
     data?: UserReviewWidgetData;
     notice?: UserReviewNotice;
   };
+  constructor(
+    private readonly successTtlMs = USER_REVIEW_SUCCESS_WIDGET_TTL_MS,
+  ) {}
 
   begin(
     requestId: string,
@@ -643,9 +721,37 @@ export class UserReviewWidgetController {
     input: { surface: string; target?: string; model?: string },
   ): number {
     const generation = ++this.#generation;
-    this.#current = { requestId, generation, ctx };
-    setWidget(ctx, buildUserReviewingWidgetData(input));
+    this.#cancelDismiss();
+    this.#current = { requestId, generation, ctx, data: buildUserReviewingWidgetData(input) };
+    this.#render();
     return generation;
+  }
+
+  /**
+   * Flip the reviewing widget to a "waiting for you" state while a
+   * `ctx.ui` prompt blocks the session. Only overlays the reviewing phase:
+   * completed outcome summaries make no running claim, and without a live
+   * widget there is nothing misleading to correct.
+   */
+  promptStart(event: { kind?: unknown; title?: unknown }): void {
+    this.#waiting = { kind: event?.kind, title: event?.title };
+    this.#render();
+  }
+
+  promptEnd(): void {
+    if (!this.#waiting) return;
+    this.#waiting = undefined;
+    this.#render();
+  }
+
+  /** Single render path; ordering of begin/complete/prompt events is irrelevant. */
+  #render(): void {
+    const current = this.#current;
+    if (!current) return;
+    const data = this.#waiting && current.data?.phase === "reviewing"
+      ? buildUserWaitingWidgetData(this.#waiting)
+      : current.data;
+    if (data) setWidget(current.ctx, data);
   }
 
   complete(
@@ -660,8 +766,12 @@ export class UserReviewWidgetController {
       return;
     }
     if (!this.#isCurrent(requestId, generation)) return;
+    this.#cancelDismiss();
     this.#current = { requestId, generation, ctx, notice, data };
     if (!setWidget(ctx, data)) notifyUserReview(ctx, notice);
+    if (isTransientCompletedOutcome(data.outcome)) {
+      this.#scheduleDismiss(generation, ctx);
+    }
   }
 
   permissionDecision(event: unknown): void {
@@ -683,15 +793,34 @@ export class UserReviewWidgetController {
       type: current.notice?.type ?? data.type,
       message: data.lines.join("\n"),
     };
+    this.#cancelDismiss();
     this.#current = { ...current, data, notice };
     if (!setWidget(current.ctx, data)) notifyUserReview(current.ctx, notice);
   }
 
   clear(ctx?: ExtensionContext): void {
     ++this.#generation;
+    this.#cancelDismiss();
+    this.#waiting = undefined;
     const current = this.#current;
     this.#current = undefined;
     if (current) setWidget(ctx ?? current.ctx, undefined);
+  }
+
+  #cancelDismiss(): void {
+    if (this.#dismissTimer === undefined) return;
+    clearTimeout(this.#dismissTimer);
+    this.#dismissTimer = undefined;
+  }
+
+  #scheduleDismiss(generation: number, ctx: ExtensionContext): void {
+    if (this.successTtlMs <= 0) return;
+    this.#dismissTimer = setTimeout(() => {
+      this.#dismissTimer = undefined;
+      if (this.#current?.generation !== generation) return;
+      this.clear(ctx);
+    }, this.successTtlMs);
+    this.#dismissTimer.unref?.();
   }
 
   #isCurrent(requestId: string, generation: number): boolean {

@@ -213,12 +213,12 @@ export class PermissionUiAutoConfirmer {
     return true;
   }
 
-  private recognizeComponent(
-    component: unknown,
+  private recognizeComponent<T>(
+    component: T,
     event: PermissionUiPromptEvent,
     attempt: PromptAttempt,
     release: () => void,
-  ): unknown {
+  ): T {
     if (!isPermissionPromptComponent(component, event)) {
       this.releaseUnrecognized(attempt, release);
       return component;
@@ -329,17 +329,18 @@ function invokeUiCustom(
   factory: (...args: any[]) => any,
   options: any,
 ): Promise<any> {
-  return Reflect.apply(method as (...args: any[]) => Promise<any>, ui, [
+  return (method as (...args: any[]) => Promise<any>).call(
+    ui,
     factory,
     options,
-  ]);
+  );
 }
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return isRecord(value) && typeof value.then === "function";
 }
 
-function isRecord(value: unknown): value is Record<string, any> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
