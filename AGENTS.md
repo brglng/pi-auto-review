@@ -13,6 +13,10 @@ functional level. When a functional conflict arises during the merge, stop and
 ask the user how to resolve it — do not resolve functional conflicts
 unilaterally.
 
+## Testing
+
+Skip the tests that depends on `@erichll/pi-sandbox`.
+
 ## Versioning
 
 - If upstream's latest version is newer than ours, merge upstream first, then
