@@ -1,10 +1,10 @@
 # @brglng/pi-auto-review
 
-This package is a fork of [`@erichll/pi-auto-review`](https://github.com/erichll/pi-packages)
+This package is a fork of [`@erichll/pi-auto-review`](https://github.com/erichll/pi-packages) tracking upstream 0.18.1.
 
 The differences from the upstream:
-- Retry count is removed.
-- `timeoutMs` no longer has an upper bound.
+- Retry count is not capped at the upstream limit of `2`.
+- `timeoutMs` is extended through Node's timer maximum of `2_147_483_647` ms.
 
 ## Original README from `@erichll/pi-auto-review`
 
@@ -39,7 +39,7 @@ that dependency is a hard prerequisite (see [Install and enable](#install-and-en
 > **Prerequisite:** pi-auto-review is an authorizer inside
 > `@gotgenes/pi-permission-system`. Pi does not auto-install peer packages, so
 > install the permission system separately (once per machine) before this
-> extension. Version 0.10.0 requires permission-system 27.x:
+> extension. This release line supports permission-system 30.0.0 and later:
 
 Node.js 22.13.0 or newer is required. Permission auditing uses Node's built-in
 `node:sqlite`; it does not require a SQLite CLI, system SQLite library, or npm
@@ -83,6 +83,12 @@ Permission-system downgrades authorizer allows on `path` and
 following recognized permission dialog. The bridge is request-ID-bound,
 expires after ten seconds, and is consumed once. Mode, component, request, or
 event-order mismatches leave the original human dialog in place.
+
+Permission-system 31.x also projects paths named directly by `for`/`select`
+word lists and `case` subjects onto the existing `path` and
+`external_directory` surfaces. Those additional requests follow the same
+bounded review and one-shot auto-confirm rules; no new surface is implicitly
+trusted.
 
 Automatic review stops for the current turn after three consecutive denials or
 ten denials in the last fifty reviews. An explicit denial tells the agent that
@@ -165,10 +171,18 @@ attempts, and retry delays. Each attempt receives only the remaining time.
 Provider-internal retries are disabled. A review may make up to
 `retries + 1` actual model calls.
 
+This fork raises the upstream `timeoutMs` ceiling to Node's timer maximum and
+removes the `retries` upper bound: `timeoutMs` is any integer from 1000 through
+`2_147_483_647` ms (upstream: 1000–120000), and `retries` is any non-negative
+integer (upstream: 0–2). The deadline timer remains within Node's supported
+delay range while allowing reviewer runs longer than 120 seconds; the shared
+deadline, `Retry-After` cap, and fail-closed behavior are unchanged.
+The defaults remain `timeoutMs: 90000` and `retries: 2`.
+
 Valid decisions, output-length stops, timeouts, aborts, authentication/model/
 request errors, and unknown failures do not retry. Empty, non-JSON, or
 schema-invalid output and recognized connection, temporary 5xx, or 429
-failures may retry once when the retry budget and deadline allow it. A
+failures may retry while the retry budget and deadline allow it. A
 `Retry-After` above five seconds or beyond the remaining deadline fails closed.
 Format retries preserve the canonical request and selected evidence and append
 only a fixed, budget-checked schema correction.
@@ -179,9 +193,11 @@ Interactive sessions show the current permission check in a single widget
 above the editor. Each check first shows its surface, compact target, and the
 dynamically configured reviewer model, then replaces that content in place
 with the outcome, target and rationale, model, token usage, duration, and any
-extra call count. A new check replaces the previous result; the latest result
-remains visible until then and is cleared when the session changes or shuts
-down. Concurrent older checks cannot overwrite the most recently started one.
+extra call count. A new check replaces the previous result. Allowed and
+auto-confirmed results dismiss after eight seconds so they do not occupy the
+editor; denials, deferrals, and local-confirmation waits stay until the next
+check, a session change, or shutdown. Concurrent older checks cannot overwrite
+the most recently started one.
 
 Every request still has its own model call, verdict, grant, local confirmation,
 and audit record. No new review-result transcript entries are written. Existing
@@ -200,7 +216,9 @@ The host-generated override:
 - expires after 60 seconds and is consumed once;
 - remains separate from untrusted user/tool evidence;
 - still goes through deterministic hard denies and model review; and
-- cannot be reissued for the same request semantics in that session.
+- cannot be reissued while a previous authorization for it is pending, or
+  again after consumption until the same action is denied afresh (one approval
+  per denial).
 
 It is authorization evidence, not a direct allow.
 
@@ -210,11 +228,15 @@ same session made in the last five minutes. After showing the rationale,
 surface, cwd, command or target summary, and request-hash fingerprint, it
 requires an explicit confirmation and a random `BREAK-GLASS <CODE>` phrase
 within 60 seconds. Successful confirmation creates a 60-second, one-use
-authorization bound to the complete request hash, session, scope, and original
-request ID. The exact retry reruns local hard-deny checks, then allows directly
-without calling the reviewer and, for sandbox adapters, still issues the normal
-one-shot grant. Break glass does not reset circuit-breaker history and can be
-disabled in trusted or project configuration with `breakGlassEnabled: false`.
+authorization bound to the complete request hash, session, and original
+request ID. The request hash deliberately excludes the per-attempt `id` and
+`toolCallId` fields: the exact retry is a brand-new model tool call issued in
+a later turn, so retry-minted identifiers cannot participate in the match.
+The exact retry reruns local hard-deny checks, then allows directly without
+calling the reviewer and, for sandbox adapters, still issues the normal
+one-shot grant. A break-glass allow resets the turn circuit breaker (a human
+re-authorized the scope), and break glass can be disabled in trusted or
+project configuration with `breakGlassEnabled: false`.
 
 ## Boundary broker API
 
@@ -297,7 +319,8 @@ audit evidence.
 `maxReviewerInputTokens` covers the fixed policy, canonical request, override,
 evidence, omissions, JSON framing, and a 64-token provider-framing reserve. Its
 legal range is 2,048–32,768. Because no matching tokenizer is bundled, the
-`conservative:utf8` estimator counts every UTF-8 byte as one token.
+`conservative:cjk-aware` estimator accounts for CJK text, JSON, paths, code,
+and framing conservatively.
 
 When over budget, the host removes secondary reasons, older structured tool
 matches, then optional producer/result units, re-estimating after each step. It
@@ -314,12 +337,11 @@ events itself. Adapters translate a concrete boundary into a `BoundaryRequest`
 and consume the exact grant before allowing it.
 
 Sandbox adapters such as a `pi-sandbox` adapter built on Anthropic Sandbox
-Runtime use the broker this way: filesystem
-policy is static and fail-closed; unmatched public network destinations use the
-broker for one connection. Each Bash command or built-in subagent session owns
-an independent Sandbox Runtime broker process. Adapter implementations should
-use the package's `./sandbox` export and must not create broad permanent rules
-in `.pi/sandbox.json`.
+Runtime use the broker this way: filesystem policy is static and fail-closed;
+unmatched public network destinations use the broker for one connection. Each
+Bash command or built-in subagent session owns an independent Sandbox Runtime
+broker process. Adapter implementations should use the package's `./sandbox`
+export and must not create broad permanent rules in `.pi/sandbox.json`.
 
 ## Trust boundary
 
@@ -418,7 +440,9 @@ provider counters from initialized values, and `unavailable` when absent.
 ## Real-model smoke test
 
 For a controlled real-model smoke test, load only the provider, reviewer,
-sandbox, and audit listener:
+sandbox, and audit listener. Only `./src/index.ts` is part of this repository;
+the `pi-sandbox` extension and smoke-audit listener come from the upstream
+monorepo checkout:
 
 ```bash
 PI_AUTO_REVIEW_ALLOW_UNTRUSTED_DEV=1 \
@@ -431,7 +455,7 @@ PI_AUTO_REVIEW_SMOKE_TRIGGER=baseline-v1 \
 pi --no-extensions --no-skills --no-prompt-templates --no-context-files \
   --no-builtin-tools --no-session --print \
   --extension /trusted/path/to/provider/extensions/index.ts \
-  --extension ./packages/pi-auto-review/src/index.ts \
+  --extension ./src/index.ts \
   --extension ./packages/pi-sandbox/src/index.ts \
   --extension ./scripts/real-model-smoke-audit.ts \
   --model provider/reviewer-model \

@@ -1,263 +1,99 @@
 # Changelog
 
-## 0.14.0-brglng.1 - 2026-08-28
+## 0.18.1-brglng.2 - 2026-09-15
 
-- **Reset to upstream 0.14.0.** Replace the fork with the published
-  `@erichll/pi-auto-review` 0.14.0 snapshot, keeping the
-  `@brglng/pi-auto-review` package identity, README fork notice, and the
-  unlimited-retries and unbounded-`timeoutMs` changes.
+- **Fail closed after late reviewer responses.** Recheck the shared deadline and
+  cancellation signal after each model call so a provider that ignores abort
+  cannot authorize a response delivered after cancellation.
+- **Expand release coverage.** Exercise configured retries beyond two model
+  calls and include the README-linked `examples/` directory in the npm package.
+
+## 0.18.1-brglng.1 - 2026-09-15
+
+- **Track upstream 0.18.1.** Replace the fork with the published
+  `@erichll/pi-auto-review` 0.18.1 code, keeping the
+  `@brglng/pi-auto-review` package identity, the README fork notice, and the
+  unlimited-retries and timer-max-bounded-`timeoutMs` changes.
+- **Standalone Node 26 test-loader compatibility.** The standalone test command
+  uses the TypeScript loader for every TypeScript source because Node 26's
+  native type stripping does not transform parameter properties; the loader
+  also handles the TypeScript sources shipped inside `node_modules`.
 - **Unlimited configured retries.** Remove the `retries` upper bound: any
   non-negative integer is accepted and a review may make up to `retries + 1`
   actual model calls. The shared `timeoutMs` deadline, abort handling,
   `Retry-After` cap, and fail-closed behavior are unchanged, and the default
   remains `retries: 2`.
-- **Unlimited review deadline.** Remove the `timeoutMs` upper bound: any
-  integer of at least 1000 ms is accepted, so slow reviewer models no longer
-  fail closed at the previous 120-second ceiling. Fail-closed behavior on
-  deadline expiry, abort handling, the `Retry-After` cap, and the default
-  `timeoutMs: 90000` are unchanged.
+- **Extended review deadline.** Raise the `timeoutMs` upper bound to Node's
+  maximum timer delay of `2_147_483_647` ms. Values from 1000 ms through that
+  limit are accepted, so slow reviewer models no longer fail closed at the
+  previous 120-second ceiling. Fail-closed behavior on deadline expiry, abort
+  handling, the `Retry-After` cap, and the default `timeoutMs: 90000` are
+  unchanged.
 
-## 0.14.0 - 2026-08-28
+## 0.18.1 - 2026-09-11
 
-- Upgrade `/auto-review-policy-audit` from redacted statistics to an
-  evidence-driven permission-configuration optimizer. Reports now separate
-  suggested allow rules, keep-ask rules, and insufficient evidence, and emit a
-  copyable JSON fragment targeting the selected project or global
-  permission-system configuration. Suggestions remain advisory and never read
-  or modify permission configuration.
-- Discover candidates from actual audit data without built-in tool, executable,
-  Git, RTK, package-manager, or read-only command catalogs. Valid observed
-  surfaces and sanitized Bash templates—including unknown tools and write
-  operations—can qualify after the configured minimum number of successful
-  ask-path approvals. Denials, gate failures, unavailable confirmations,
-  forwarded requests, and structurally unsafe Bash variants block a suggestion.
-- Migrate the policy-audit database transactionally to schema v2. Existing
-  aggregate counts and `collecting_since` are preserved, while the new
-  `recommendations_since` boundary prevents pre-migration data from producing
-  allow suggestions. Valid custom tool names and sanitized Bash templates are
-  retained for reporting. Templates replace paths, URLs, assignments, quoted
-  values, and option values with wildcards; raw commands and non-Bash tool
-  arguments or inputs remain excluded.
+- Animate the live `reviewing` label in the above-editor widget with a
+  left-to-right light sweep while the reviewer model is evaluating a boundary check.
+- Paint shimmer frames at an 80ms interval cycling theme colors (`accent`,
+  `muted`, `dim`) without altering the label text length or widget layout width.
+- Ensure the animation timer cleanly stops and disposes when the review phase
+  completes or the widget is dismissed.
+- Export `USER_REVIEW_SWEEP_INTERVAL_MS` and `renderReviewingSweep` for testing
+  and custom TUI rendering.
 
-## 0.13.0 - 2026-08-28
+## 0.18.0 - 2026-09-11
 
-- Add compatibility with `@gotgenes/pi-permission-system` 27.1 directional
-  `path_*` and `external_directory_*` surfaces while retaining the original
-  surface in authorization evidence, UI binding, logs, and policy audits.
-- Keep the permission-system peer range at `^27.0.0` so existing 27.x bare
-  `path` and `external_directory` integrations remain supported.
+- Coordinated release for `@erichll/pi-sandbox 0.18.0`.
+- Dismiss the above-editor widget eight seconds after an allow or auto-confirm
+  so a successful check does not stay on screen until the next review. Denials,
+  deferrals, and local-confirmation waits still remain until the next check.
+- Raise the `@gotgenes/pi-permission-system` peer floor to `>=30.0.0` and drop
+  the upper bound. 29.x is no longer claimed; 32.x does not change the public
+  authorizer API this package uses, and later majors are no longer excluded by
+  the range.
 
-## 0.12.0 - 2026-08-27
+## 0.17.0 - 2026-09-05
 
-- Add the private policy audit
-  compare current-project or anonymous global surface/command hotspots, denial
-  rates, approval sources, and rule-hit fingerprints; then review repeatedly
-  approved read-only operations as candidates for narrowly scoped `allow`
-  rules. Mutation, project execution, network, arbitrary-shell, unknown, and
-  custom-tool activity is called out as keep-`ask` evidence rather than an
-  automatic relaxation. The report does not edit policy or claim that an
-  unobserved rule is unused.
-- Add default-on, 180-day permission-policy auditing backed by built-in
-  `node:sqlite`. Permission decisions are immediately reduced to fixed command,
-  risk, path-class, source, and anonymous rule-hit aggregates; raw commands,
-  paths, URLs, credentials, request IDs, and project names are never stored.
-- Add `/auto-review-policy-audit` as an extension-owned custom-entry report.
-  It is not registered as an Agent tool or packaged skill, so audit reporting
-  adds no tool schema or skill metadata to the model context. Reports default
-  to the current project and can explicitly show an anonymous global aggregate.
-- Require Node.js 22.13.0 or newer. No SQLite CLI, system library, npm SQLite
-  package, RTK, or historical permission-log import is required.
+- Coordinated release for `@erichll/pi-sandbox 0.17.0`; the broker API and
+  approval behavior are unchanged.
+- Align the development pin of `@gotgenes/pi-permission-system` to the 31.1.x
+  runtime line and update the authorizer-integration test to the 31.1.1
+  internal source layout (the 31.1.1 refactor moved `path-normalizer.ts`).
+- Split the 2,778-line `src/index.ts` into a `src/review/` module directory
+  (`types`, `consts`, `config`, `audit`, `prompts`, `guards`, `input`,
+  `provider`, `complete`) with an internal barrel, matching the existing
+  `broker/` and `policy-audit/` conventions; the public export surface of
+  `src/index.ts` is unchanged.
+- Harden TypeScript checking: enable `noUncheckedIndexedAccess` and
+  `noImplicitOverride` across the workspace and fix all 47 newly surfaced
+  unguarded-index sites.
+- Replace the full custom TypeScript test loader with native Node type
+  transformation (`--experimental-transform-types`); a scoped hook now only
+  handles the TypeScript sources shipped inside `node_modules`, which Node
+  refuses to type-strip.
 
-## 0.11.1 - 2026-08-25
+## 0.16.0 - 2026-09-05
 
-- Align the package version with `@erichll/pi-sandbox` `0.11.1`. No
-  pi-auto-review runtime or public API changes.
+- Coordinated release for `@erichll/pi-sandbox 0.16.0`; the broker API and
+  approval behavior are unchanged.
 
-## 0.11.0 - 2026-08-24
+## 0.15.3 - 2026-09-03
 
-- **Structured network destination.** Network approval requests now carry
-  separate host, port, and protocol fields alongside the existing combined
-  destination string. One-shot grants bind each component independently, so a
-  grant issued for one host-port-protocol combination cannot be reused for a
-  different one.
-- **Deferred reviews are more visible.** The review widget now highlights
-  deferred verdicts with a warning accent instead of the previous muted style,
-  making pending human decisions easier to spot.
+- Tolerate a single enclosing ```` ```json ```` or bare Markdown code fence
+  around reviewer decisions while preserving strict decision-schema
+  validation (fixes reviewer models that fence JSON despite the prompt,
+  notably when routed through Claude Code).
+- Verify compatibility with `@gotgenes/pi-permission-system` 30.2.0 and
+  31.0.0, widen the peer range through 31.x, and move the development baseline
+  to 31.0.0.
+- Keep permission-system 31 statement-operand audit classification aligned for
+  `for`/`select` word lists and `case` subjects without treating case patterns
+  as accessed paths.
+- Confirm that model auto-confirm stays one-shot and cannot select
+  permission-system 30.2's wider both-directions session grant.
 
-## 0.10.0 - 2026-08-22
+## 0.15.2 - 2026-09-02
 
-- Replace the review footer and newly appended transcript entries with one
-  above-editor `pi-auto-review` widget. Each permission check independently
-  replaces the previous display, shows the configured reviewer model while it
-  runs, and updates in place with its final outcome and metadata. The latest
-  result remains until the next check and is cleared on session change or
-  shutdown.
-- Prevent late concurrent completions and permission decisions from overwriting
-  a newer check. A current local denial adds `Local confirmation · denied` to
-  that result only. Widget failures fall back to notifications without changing
-  authorization behavior.
-- Remove tool-call grouping, timers, capacity eviction, and tool/turn flush
-  wiring for new feedback while retaining the historical entry renderer. Bound
-  target and rationale text with visible ellipses, preserve width-aware wrapping,
-  and keep token, duration, and call-count numbers in the normal metadata color.
-
-## 0.9.0 - 2026-08-22
-
-- Require `@gotgenes/pi-permission-system` `^27.0.0` and register through the
-  session-keyed `getPermissionsService(sessionId)` locator. Repeated ready
-  broadcasts are idempotent; session changes, shutdown, and late asynchronous
-  imports cannot retain or revive a stale authorizer registration. In-process
-  child nodes register against their own service without replacing the
-  parent's process-local broker capability.
-- Group local TUI review results by `(sessionId, toolCallId)` into one
-  transcript entry while preserving independent asks, model calls, verdicts,
-  grants, confirmations, and audit records. Denials flush immediately; tool
-  start, terminal permission denial, turn/agent/session end, a 60-second TTL,
-  and bounded-capacity eviction provide lossless fallback flushes. Forwarded,
-  uncorrelated, and non-TUI reviews remain immediate.
-- Add `toolCallId` to each `pi_auto_review_decision` audit entry and retain
-  compatibility rendering for historical single-result transcript entries.
-- Remove the review entry's left quote bar and combine each target with its
-  rationale and member surface/outcome on one line, keeping model/token/duration
-  metadata separate.
-- Label every displayed model token count with `toks` in both grouped and
-  single-result output.
-
-## 0.8.2 - 2026-08-21
-
-- Structure interactive review results as headline, target, rationale, and a
-  meta line with the reviewer model name, input/output tokens, duration, and extra
-  calls. The TUI renders them as markdown-style quote rows (`│` + `mdQuote`),
-  with allow/deny verbs and token counts tinted from the theme. The model id is
-  shown without a provider prefix; audit still records the full `provider/id`.
-  Local hard denies omit model and token fields because no model ran.
-
-## 0.8.1 - 2026-08-21
-
-- Restore TUI auto-confirm for capped `path` / `external_directory` allows on
-  permission-system 26.x. `permissions:ui_prompt` no longer carries `message`;
-  the bridge now binds `requestId` plus `request.value` (falling back to the
-  display `value`, then the legacy `message`) and fingerprints the live dialog
-  with those fields. Top-level display `surface` is not treated as the gate.
-
-## 0.8.0 - 2026-08-21
-
-- Add `/auto-review-approve` for exact non-critical denial retries and remove
-  the unprefixed `/approve` command without a compatibility alias.
-- Add interactive `/auto-review-break-glass` for a recent critical model deny.
-  The high-friction confirmation is bound to the full request hash, session,
-  scope, and original request ID, expires after 60 seconds, permits one direct
-  retry, and never bypasses deterministic or protected-write hard denies.
-- Add tighten-only `breakGlassEnabled` (default `true`), structured break-glass
-  allow provenance, and challenge/authorization/consumption/rejection audit
-  events. Challenge phrases are never included in audit events.
-
-## 0.7.0 - 2026-08-20
-
-- **Named `/home` paths are not a home wipe.** The reviewer prompt now matches
-  the deterministic hard-deny: recursive forced wipe of `/`, `~`, `$HOME`, or
-  the home directory itself remains forbidden. A narrow, user-requested delete
-  of named files or directories under `/home/...` is high-risk, not critical.
-  High risk without medium/high user authorization defers to the human instead
-  of denying as if it were a hard deny. The fixed prompt is compacted without
-  changing those rules.
-- **Clearer agent-facing denials.** Authorizer denies still fail closed, but the
-  teaching reason now states that automatic policy denied the request (not a
-  human click), forbids rephrasing or circumvention, and points to the exact
-  retry command
-  for one exact retry when the user already requested that action. The
-  permission-system wrapper may still say `User denied`; the reason suffix is
-  the correction this package can own.
-
-## 0.6.0 - 2026-08-20
-
-- **Remove host user-constraint overlay.** Stop rewriting model allows from
-  regex matches on user text (`constraintEffect` / `vagueContinuation` /
-  authorization ceilings). Older messages enter evidence only via an exact
-  request reference or trusted exact retry. Compaction summaries remain
-  excluded from user intent. Hard denies, grant hashing, and the reviewer
-  model are unchanged.
-
-## 0.5.0 - 2026-08-20
-
-- **Safer evidence selection.** Review only request-linked tool calls, paired
-  results, current-task user intent, and bounded security evidence. Compaction
-  summaries cannot restore authorization, raw revocations override model
-  allows, and missing mandatory evidence fails closed before a model call.
-- **Independent, smaller reviewer requests.** Use one compact canonical request
-  envelope and a byte-stable policy prefix, reducing fixed input from 2,011 to
-  1,396 characters. Independent SSE calls prevent prior review state from
-  carrying into later approvals while preserving cache/routing identity.
-- **Explicit token limits.** Add tighten-only `maxReviewerInputTokens` with an
-  8,192 default and conservative UTF-8 accounting across the complete prompt.
-  Lower the default `maxTokens` from 1,600 to 256 after sequential real-model
-  validation at 384 and 256; the legal range remains 256–4,096.
-- **Typed, bounded retries.** Share one deadline across each review, disable
-  provider-internal retries, and allow at most two actual model calls. Only
-  format errors, recognized connection/5xx failures, and bounded 429 responses
-  retry; deterministic and unknown failures remain terminal and fail closed.
-- **Privacy-bounded telemetry.** Record per-attempt usage and per-review
-  summaries for both reviewer entry points using stable status/error codes and
-  prompt-part counts, without logging evidence text, provider errors,
-  credentials, headers, or URL query values.
-
-## 0.4.0 - 2026-08-19
-
-- **Credential-exfiltration hardening.** Expand deterministic terminal denies to cover
-  `.env` variants, common credential files, additional file readers and encoders,
-  shell substitutions, staged variables, redirects, and multi-stage pipelines that
-  upload credentials to network sinks. Template files such as `.env.example` and
-  `.env.sample` remain reviewable.
-- **Reviewer refresh safety.** Re-resolve reviewer model/provider metadata for each
-  review, reacquire authentication for each attempt, and bind the reviewer session
-  identity to the endpoint and authentication fingerprint so provider or OAuth
-  refreshes cannot reuse a stale connection.
-- **Compatibility.** Require Pi 0.84.1+ and permission-system 25.1.0+ to match the
-  current reviewer and forwarded-permission contracts.
-
-## 0.3.5 - 2026-08-13
-
-- Raise the default model-review `timeoutMs` from 45s to 90s and the default
-  `retries` from 1 to 2. Approval now tolerates real-world model latency better
-  while keeping the same bounded transcript surface.
-
-## 0.3.4 - 2026-08-08
-
-- Normalize direct and permission-system v24 forwarded evidence before policy
-  checks, model review, grant hashing, and audit logging. Forwarded Bash
-  commands, canonical path boundaries, agent names, and requester session IDs
-  now remain bound to the exact reviewed request.
-- Add an opt-in `PI_AUTO_REVIEW_AUDIT_FILE` JSONL sink for isolated release
-  verification without changing the normal event-based audit surface.
-
-## 0.3.3 - 2026-08-06
-
-- Fix config validation rejecting multi-segment model ids (`provider/group/model`).
-  `validateConfig` no longer restricts a model to exactly one `/`; it only rejects
-  ids with empty segments. Segments are resolved as before: the first segment is
-  the provider and the rest is the model id.
-
-## 0.3.2 - 2026-07-29
-
-- Load an optional user-global trusted config from
-  `~/.pi/agent/extensions/pi-auto-review/config.json` as a full overlay on the
-  package defaults (model, `autoConfirmBoundedAllows`, and other legal keys).
-- Keep project `.pi/pi-auto-review.json` tighten-only on top of that trusted
-  layer.
-- Deterministically deny writes to the user-global reviewer config directory.
-- Default reviewer model is the bare id `codex-auto-review`; `provider/model`
-  remains supported. Bare ids resolve against registered available models.
-- Show user-facing review feedback in interactive UI: a footer status while the
-  model is reviewing, then a short toast for allow / deny / defer / auto-confirm
-  / circuit-breaker outcomes (separate from agent denial reasons).
-
-## 0.3.1 - 2026-07-29
-
-- Bind one-shot approval grants to matched policy evidence as well as the
-  command, working directory, destination, paths, and other request fields.
-- Prevent a grant issued for one Host-IPC trigger from authorizing a request
-  with different trigger evidence.
-
-## 0.3.0 - 2026-07-28
-
-- Initial public release.
+- No behavior changes. Verified against `@gotgenes/pi-permission-system`
+  29.x with a development baseline of `29.3.0`; the peer range now accepts
+  29.x alongside 28.x.
