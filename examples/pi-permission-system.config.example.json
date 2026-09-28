@@ -98,22 +98,30 @@
       "mcp_list": "allow",
       "mcp_search": "allow",
       "mcp_describe": "allow",
-      "atlassian": "allow",
       "atlassian:*": "allow",
       "atlassian_*": "allow",
       "jira_*": "allow",
-      "confluence_*": "allow"
+      "confluence_*": "allow",
+      "pencil": "allow",
+      "pencil_*": "allow"
     },
     "skill": {
       "*": "allow"
     },
     "ask_user": "allow",
     "mcpScript": "allow",
+    "mcp__atlassian": "allow",
+    "mcp__pencil": "allow",
     "todo": "allow",
     "web_search": "allow",
     "get_search_content": "allow",
     "fetch_content": "ask",
     "plan_mode_question": "allow",
-    "plan_mode_complete": "allow"
+    "plan_mode_complete": "allow",
+    "update_plan": "allow",
+    "goal_complete": "allow",
+    "goal_block": "allow",
+    "goal_wait": "allow",
+    "obs_recall": "allow"
   }
 }

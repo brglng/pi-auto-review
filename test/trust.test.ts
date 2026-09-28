@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -11,6 +12,9 @@ import {
   loadTrustedConfig,
   userConfigPath,
 } from "../src/index.ts";
+import { protectedWriteHardDeny } from "../src/review/guards.ts";
+import { sessionConfig } from "../src/review/input.ts";
+import type { BoundaryRequest } from "../src/broker/types.ts";
 
 const TEST_TMP_ROOT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -160,6 +164,14 @@ test("loadTrustedConfig merges optional user file over package defaults", () => 
       packageConfig,
     );
 
+    for (const content of ["", " \n\t "]) {
+      writeFileSync(userPath, content);
+      assert.deepEqual(
+        loadTrustedConfig({ packageConfig, userConfigPath: userPath }),
+        packageConfig,
+      );
+    }
+
     writeFileSync(
       userPath,
       JSON.stringify({
@@ -188,6 +200,57 @@ test("loadTrustedConfig merges optional user file over package defaults", () => 
         },
       ),
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("empty project config falls back to trusted config", () => {
+  const root = makeTempDir("pi-auto-review-project-config-");
+  const projectConfigPath = join(root, ".pi", "pi-auto-review.json");
+  const trusted = loadConfig();
+  try {
+    mkdirSync(dirname(projectConfigPath), { recursive: true });
+    for (const content of ["", " \n\t "]) {
+      writeFileSync(projectConfigPath, content);
+      assert.deepEqual(sessionConfig(root, trusted, true), trusted);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ordinary Pi settings are not protected-write hard-denies", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-auto-review-protected-policy-"));
+  const globalAgentDirectory = join(homedir(), ".pi", "agent");
+  const ordinarySettings = [
+    join(root, ".pi", "settings.json"),
+    join(root, ".pi", "sandbox.json"),
+    join(globalAgentDirectory, "settings.json"),
+    join(globalAgentDirectory, "permissions.json"),
+    join(globalAgentDirectory, "sandbox.json"),
+  ];
+  const protectedSettings = [
+    join(root, ".pi", "pi-auto-review.json"),
+    userConfigPath(),
+    join(process.cwd(), "src", "config.json"),
+  ];
+  const hardDeny = (cwd: string, path: string) => protectedWriteHardDeny({
+    id: "protected-file-policy",
+    source: "sandbox-runtime",
+    surface: "filesystem-write",
+    operation: "write",
+    cwd,
+    path,
+  } satisfies BoundaryRequest);
+
+  try {
+    for (const path of ordinarySettings) {
+      assert.equal(hardDeny(root, path), undefined, path);
+    }
+    for (const path of protectedSettings) {
+      assert.equal(hardDeny(root, path)?.rule, "security-control-tampering", path);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
