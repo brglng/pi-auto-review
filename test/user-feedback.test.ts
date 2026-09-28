@@ -454,6 +454,35 @@ test("successful completions dismiss after the success TTL", async () => {
   assert.equal(harness.widgets.at(-1)?.content, undefined);
 });
 
+test("permissionDecision with allow dismisses a deferred review widget", async () => {
+  const harness = widgetHarness("tui", 20);
+  const generation = harness.controller.begin("request-defer", harness.ctx as never, {
+    surface: "external_directory_read",
+    target: "/home/user/.pi",
+    model: "provider/reviewer",
+  });
+  const input = {
+    outcome: "defer" as const,
+    surface: "external_directory_read",
+    target: "/home/user/.pi",
+  };
+  harness.controller.complete(
+    "request-defer",
+    generation,
+    harness.ctx as never,
+    buildUserReviewNotice(input),
+    buildUserReviewWidgetData(input),
+  );
+  assert.notEqual(harness.widgets.at(-1)?.content, undefined);
+
+  harness.controller.permissionDecision({
+    requestId: "request-defer",
+    result: "allow",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(harness.widgets.at(-1)?.content, undefined);
+});
+
 test("denials and confirmation waits stay until the next check", async () => {
   for (const outcome of ["deny", "needs_confirmation", "defer"] as const) {
     const harness = widgetHarness("tui", 20);

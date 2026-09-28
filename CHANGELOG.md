@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.21.0-brglng.1 - 2026-09-28
+
+- Track upstream `@erichll/pi-auto-review` 0.21.0, retain the fork package and
+  repository identity, and update Pi and permission-system development/peer
+  baselines to the upstream-compatible versions.
+- Adopt upstream's protected-file policy and tolerate empty or whitespace-only
+  user and project config files by falling back to their trusted defaults.
+- Normalize reviewer context before calling registered providers, dismiss
+  review widgets on explicit local allow and at the start of a new turn, and
+  add regression coverage for provider context, widget lifecycle, config
+  fallback, permission policy, and MCP rule semantics.
+- Preserve the fork's unbounded configured retries and per-attempt timeout
+  budget; timed-out attempts remain retryable, late results remain fail-closed,
+  `timeoutMs` extends to Node's maximum timer delay, and non-JSON grant values
+  remain rejected.
+- Keep the README-linked examples in the published package.
+
 ## 0.18.1-brglng.3 - 2026-09-16
 
 - **Per-attempt review timeout.** Apply `timeoutMs` independently to each

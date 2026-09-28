@@ -511,6 +511,16 @@ test("critical denial selection expires after five minutes and can be disabled",
   );
 });
 
+test("grant hash rejects non-JSON request values", () => {
+  for (const value of [Symbol("command"), 1n, () => "command"]) {
+    const invalid = { ...request, command: value } as unknown as BoundaryRequest;
+    assert.throws(
+      () => boundaryRequestHash(invalid),
+      /boundary request contains a non-JSON value/,
+    );
+  }
+});
+
 test("the exact-match hash ignores retry-minted identifiers (requestId, toolCallId)", () => {
   const retried: BoundaryRequest = {
     ...request,

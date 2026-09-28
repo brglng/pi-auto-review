@@ -3,10 +3,10 @@ import { existsSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import test from "node:test";
-// These deep imports reach pi-permission-system internals that its public
-// entry (".") does not export. They are pinned to the 31.x source layout;
-// the 31.1.1 directory refactor already moved path-normalizer.ts once.
-// When upgrading across minor/major lines, re-verify every path below.
+// These deep imports reach permission-system internals that its public entry
+// (".") does not export. They are pinned to the 33.x source layout: 31.1.1
+// moved path-normalizer.ts, and 33.0.0 changed MCP target derivation and rule
+// evaluation (see test/mcp-rule-semantics.test.ts). Re-verify when upgrading.
 import { AuthorizerRegistry } from "../node_modules/@gotgenes/pi-permission-system/src/authority/authorizer-registry.ts";
 import { composeAuthorizerChain } from "../node_modules/@gotgenes/pi-permission-system/src/authority/authorizer-chain.ts";
 import { encloseInDelegationEnvelope } from "../node_modules/@gotgenes/pi-permission-system/src/authority/delegation-envelope.ts";
@@ -26,6 +26,7 @@ import {
   type Config,
 } from "../src/index.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { getCurrentSystemPrompt } from "@earendil-works/pi-ai/compat";
 import { getBoundaryBroker } from "../src/broker/index.ts";
 import { boundaryRequestHash } from "../src/broker/grants.ts";
 
@@ -97,6 +98,26 @@ class UnrelatedPromptComponent {
   render(): string[] {
     return ["Unrelated custom UI"];
   }
+}
+
+/**
+ * Pi 0.86 normalized provider-facing requests: the reviewer system prompt and
+ * tool declarations travel as the transcript's leading system message instead
+ * of `Context.systemPrompt`, so the harness fake observes the provider shape.
+ */
+function reviewerTranscript(modelContext: unknown): {
+  messages: Array<{ role: string; content: string }>;
+  systemPrompt: string;
+  userPrompt: string;
+} {
+  const messages = (modelContext as {
+    messages: Array<{ role: string; content: string }>;
+  }).messages;
+  return {
+    messages,
+    systemPrompt: getCurrentSystemPrompt(messages),
+    userPrompt: messages.at(-1)?.content ?? "",
+  };
 }
 
 function config(overrides: Partial<Config> = {}): Config {
@@ -758,6 +779,20 @@ test("real permission-system authorizer chain integration", async (t) => {
     }
   });
 
+  await t.test("turn_start clears the current review widget", async () => {
+    const instance = harness(allow, { interactiveTui: true });
+    try {
+      const result = await instance.authorize("bash");
+      assert.equal(result.decision.approved, true);
+      assert.equal(typeof instance.widgets.at(-1)?.content, "function");
+
+      instance.handlers.get("turn_start")?.();
+      assert.equal(instance.widgets.at(-1)?.content, undefined);
+    } finally {
+      instance.dispose();
+    }
+  });
+
   await t.test("forwarded and uncorrelated asks also use the same widget", async () => {
     const instance = harness(allow, { interactiveTui: true });
     try {
@@ -870,11 +905,10 @@ test("real permission-system authorizer chain integration", async (t) => {
         toolCallId: "call-current",
         toolName: "bash",
       });
-      const context = instance.modelContexts.at(-1) as {
-        systemPrompt: string;
-        messages: Array<{ content: string }>;
-      };
-      assert.equal(context.messages.length, 1);
+      const context = reviewerTranscript(instance.modelContexts.at(-1));
+      assert.equal(context.messages.length, 2);
+      assert.equal(context.messages[0]?.role, "system");
+      assert.equal(context.messages.at(-1)?.role, "user");
       assert.ok(context.systemPrompt.length < 2_011);
       assert.equal(context.systemPrompt.match(/"outcome"/g)?.length, 1);
       assert.match(context.systemPrompt, /\$HOME/);
@@ -890,7 +924,7 @@ test("real permission-system authorizer chain integration", async (t) => {
         context.systemPrompt,
         /destructive\s+root\/home operations/,
       );
-      const prompt = context.messages[0].content;
+      const prompt = context.userPrompt;
       const envelope = JSON.parse(prompt) as Record<string, unknown>;
       assert.deepEqual(Object.keys(envelope), [
         "evidence",
@@ -967,13 +1001,10 @@ test("real permission-system authorizer chain integration", async (t) => {
         requestId: "canonical-dedupe-second",
         value: "example.com:443",
       });
-      const second = instance.modelContexts.at(-1) as {
-        systemPrompt: string;
-        messages: Array<{ content: string }>;
-      };
+      const second = reviewerTranscript(instance.modelContexts.at(-1));
       assert.equal(second.systemPrompt, context.systemPrompt);
-      assert.equal(second.messages.length, 1);
-      assert.notEqual(second.messages[0].content, prompt);
+      assert.equal(second.messages.length, 2);
+      assert.notEqual(second.userPrompt, prompt);
     } finally {
       instance.dispose();
     }
@@ -1341,8 +1372,8 @@ test("real permission-system authorizer chain integration", async (t) => {
       });
       assert.equal(result.decision.approved, true);
       assert.equal(instance.modelContexts.length, 2);
-      const prompts = instance.modelContexts.map((context) =>
-        (context as { messages: Array<{ content: string }> }).messages[0].content
+      const prompts = instance.modelContexts.map(
+        (context) => reviewerTranscript(context).userPrompt,
       );
       assert.ok(prompts[1].startsWith(`${prompts[0]}\n\n`));
       assert.match(prompts[1], /Format correction only/);
@@ -1580,8 +1611,7 @@ test("real permission-system authorizer chain integration", async (t) => {
         { reason: "older-structured-tool", count: 3 },
       ]);
       const envelope = JSON.parse(
-        (instance.modelContexts[0] as { messages: Array<{ content: string }> })
-          .messages[0].content,
+        reviewerTranscript(instance.modelContexts[0]).userPrompt,
       ) as {
         evidence: { toolCalls: { items: Array<{ toolCallId?: string }> } };
         omissions: { budgetRemovals: unknown };
@@ -1735,8 +1765,7 @@ test("real permission-system authorizer chain integration", async (t) => {
         [{ reason: "optional-result", count: 1 }],
       );
       const envelope = JSON.parse(
-        (instance.modelContexts[0] as { messages: Array<{ content: string }> })
-          .messages[0].content,
+        reviewerTranscript(instance.modelContexts[0]).userPrompt,
       ) as {
         evidence: {
           toolCalls: { items: Array<{ toolCallId?: string }> };
@@ -1781,10 +1810,7 @@ test("real permission-system authorizer chain integration", async (t) => {
           requestId: `utf8-estimator-${index}`,
           value: "example.com:443",
         });
-        const context = instance.modelContexts[0] as {
-          systemPrompt: string;
-          messages: Array<{ content: string }>;
-        };
+        const context = reviewerTranscript(instance.modelContexts[0]);
         const completion = instance.telemetry.find(
           (event) => event.type === "review_complete",
         );
@@ -1793,7 +1819,7 @@ test("real permission-system authorizer chain integration", async (t) => {
         assert.equal(
           total,
           estimateReviewerTokens(context.systemPrompt) +
-            estimateReviewerTokens(context.messages[0].content) +
+            estimateReviewerTokens(context.userPrompt) +
             64,
         );
         assert.ok(total >= 100);
@@ -2348,6 +2374,48 @@ test("real permission-system authorizer chain integration", async (t) => {
     } finally {
       aborted.dispose();
     }
+
+    const inFlightController = new AbortController();
+    let resolveProviderStarted = () => {};
+    let resolveLateResponse: ((response: string) => void) | undefined;
+    const providerStarted = new Promise<void>((resolve) => {
+      resolveProviderStarted = resolve;
+    });
+    const inFlightAbort = harness(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveLateResponse = resolve;
+          resolveProviderStarted();
+        }),
+      { signal: inFlightController.signal },
+    );
+    const authorization = inFlightAbort.authorize("bash_escalated");
+    try {
+      await Promise.race([
+        providerStarted,
+        authorization.then(() => {
+          throw new Error("authorization completed before the provider call started");
+        }),
+      ]);
+      inFlightController.abort();
+      const lateResponse = resolveLateResponse;
+      assert.ok(lateResponse);
+      lateResponse(allow);
+
+      const result = await authorization;
+      assert.equal(result.decision.approved, false);
+      const attempt = inFlightAbort.telemetry.find(
+        (event) => event.type === "review_attempt",
+      );
+      assert.equal(attempt?.status, "abort");
+      assert.equal(attempt?.errorClass, "abort");
+      const completion = inFlightAbort.telemetry.find(
+        (event) => event.type === "review_complete",
+      );
+      assert.deepEqual(completion?.errorCounts, { abort: 1 });
+    } finally {
+      inFlightAbort.dispose();
+    }
   });
 
   await t.test("a retry starts with a fresh timeout budget after a timed-out attempt", async () => {
@@ -2524,7 +2592,7 @@ test("real permission-system authorizer chain integration", async (t) => {
     }
   });
 
-  await t.test("security configuration writes are hard-denied", {
+  await t.test("security extension configuration writes are hard-denied", {
     skip: SANDBOX_SIBLING_SKIP,
   }, async () => {
     const approveSandboxTrap = sandboxApproval?.approveSandboxTrap;
@@ -2533,7 +2601,7 @@ test("real permission-system authorizer chain integration", async (t) => {
     try {
       const broker = getBoundaryBroker();
       assert.ok(broker);
-      const protectedPath = `${process.cwd()}/.pi/settings.json`;
+      const protectedPath = `${process.cwd()}/.pi/pi-auto-review.json`;
       const result = await approveSandboxTrap(
         {
           kind: "filesystem",
@@ -2542,7 +2610,7 @@ test("real permission-system authorizer chain integration", async (t) => {
           query_id: "78",
           operation: "write",
           path: protectedPath,
-          requested_path: ".pi/settings.json",
+          requested_path: ".pi/pi-auto-review.json",
           syscall: "openat",
           errno: "EACCES",
           flags: ["O_WRONLY"],
@@ -2557,7 +2625,7 @@ test("real permission-system authorizer chain integration", async (t) => {
         },
         {
           broker,
-          command: "touch .pi/settings.json",
+          command: "touch .pi/pi-auto-review.json",
           cwd: process.cwd(),
           sessionId: "integration-session",
           scopeKey: "turn-1",
@@ -2587,7 +2655,7 @@ test("real permission-system authorizer chain integration", async (t) => {
       {
         writeSurface: "external_directory_write",
         readSurface: "external_directory_read",
-        target: join(process.cwd(), ".pi", "settings.json"),
+        target: join(process.cwd(), ".pi", "pi-auto-review.json"),
       },
     ];
 
@@ -2686,10 +2754,8 @@ test("real permission-system authorizer chain integration", async (t) => {
 
       const retry = await instance.authorize("bash_escalated");
       assert.equal(retry.decision.approved, false);
-      const context = instance.modelContexts.at(-1) as {
-        messages: Array<{ content: string }>;
-      };
-      const envelope = JSON.parse(context.messages[0].content) as {
+      const context = reviewerTranscript(instance.modelContexts.at(-1));
+      const envelope = JSON.parse(context.userPrompt) as {
         override: Record<string, unknown>;
       };
       assert.deepEqual(

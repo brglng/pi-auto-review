@@ -1,10 +1,12 @@
 # @brglng/pi-auto-review
 
-This package is a fork of [`@erichll/pi-auto-review`](https://github.com/erichll/pi-packages) tracking upstream 0.18.1.
+This package is a fork of [`@erichll/pi-auto-review`](https://github.com/erichll/pi-packages) tracking upstream 0.21.0.
 
-The differences from the upstream:
-- Retry count is not capped at the upstream limit of `2`.
-- `timeoutMs` is extended through Node's timer maximum of `2_147_483_647` ms.
+The differences from upstream are:
+- Configured retries are not capped at two model calls, and timeout failures may retry within the configured budget.
+- `timeoutMs` is extended through Node's timer maximum of `2_147_483_647` ms per attempt.
+- Abort and timeout cancellation remains fail-closed even when a provider returns a late result.
+- Non-JSON boundary request values are rejected when computing grant hashes.
 
 ## Original README from `@erichll/pi-auto-review`
 
@@ -39,7 +41,7 @@ that dependency is a hard prerequisite (see [Install and enable](#install-and-en
 > **Prerequisite:** pi-auto-review is an authorizer inside
 > `@gotgenes/pi-permission-system`. Pi does not auto-install peer packages, so
 > install the permission system separately (once per machine) before this
-> extension. This release line supports permission-system 30.0.0 and later:
+> extension. This release line supports permission-system 34.0.0 and later:
 
 Node.js 22.13.0 or newer is required. Permission auditing uses Node's built-in
 `node:sqlite`; it does not require a SQLite CLI, system SQLite library, or npm
@@ -153,11 +155,12 @@ Package defaults:
 terminal. Set `autoConfirmBoundedAllows` to `[]` to keep every bounded allow
 manual.
 
-Project configuration may only lower per-attempt timeouts, token/evidence limits, retries,
-and grant TTL, set `failureMode` to `"deny"`, set `breakGlassEnabled` to
-`false`, or remove auto-confirmed surfaces. It cannot re-enable break glass,
-select a model, raise a trusted limit, or weaken fail-closed behavior. Invalid
-configuration disables the reviewer for that session.
+Project configuration may only lower per-attempt timeouts, token/evidence
+limits, retries, and grant TTL, set `failureMode` to `"deny"`, set
+`breakGlassEnabled` to `false`, or remove auto-confirmed surfaces. It cannot
+re-enable break glass, select a model, raise a trusted limit, or weaken
+fail-closed behavior. Invalid configuration disables the reviewer for that
+session.
 
 The trusted user config may set `policyAudit.enabled` and a retention of
 1–3,650 days. Project config may only set `enabled: false` or shorten the
@@ -174,16 +177,18 @@ retries are disabled. A review may make up to `retries + 1` actual model calls.
 This fork raises the upstream `timeoutMs` ceiling to Node's timer maximum and
 removes the `retries` upper bound: `timeoutMs` is any integer from 1000 through
 `2_147_483_647` ms per attempt (upstream: 1000–120000), and `retries` is any
-non-negative integer (upstream: 0–2). The per-attempt timer remains within
-Node's supported delay range, while the configured retry count is the only
-review-level bound. The defaults remain `timeoutMs: 90000` and `retries: 2`.
+non-negative integer (upstream accepts 0–2 but caps a review at two model
+calls). The per-attempt timer remains within Node's supported delay range,
+while the configured retry count is the only review-level bound. Defaults
+remain `timeoutMs: 90000` and `retries: 2`.
 
 Valid decisions, output-length stops, aborts, authentication/model/request
-errors, and unknown failures do not retry. Timeouts, empty, non-JSON, or
-schema-invalid output and recognized connection, temporary 5xx, or 429
-failures may retry while the retry count allows it. A `Retry-After` above five
-seconds fails closed. Format retries preserve the canonical request and
-selected evidence and append only a fixed, budget-checked schema correction.
+errors, and unknown failures do not retry. This fork also retries timed-out
+attempts; empty, non-JSON, or schema-invalid output and recognized connection,
+temporary 5xx, or 429 failures may retry while the configured budget allows it.
+A `Retry-After` above five seconds fails closed. Format retries preserve the
+canonical request and selected evidence and append only a fixed, budget-checked
+schema correction.
 
 ## Operator feedback and exact retry
 
@@ -352,9 +357,11 @@ in:
 PI_AUTO_REVIEW_ALLOW_UNTRUSTED_DEV=1 pi --approve
 ```
 
-Writes to the installed reviewer package, its user-global configuration,
-project and global security configuration, and the global audit directory are
-deterministically denied.
+Writes to the installed reviewer package, its protected extension directory
+and logs, the auto-review-specific project and user configuration, and the
+global audit directory are deterministically denied. Ordinary project and
+user Pi settings, permissions, and sandbox configuration are left to normal
+authorization and permission rules.
 
 ## Permission policy audit
 
